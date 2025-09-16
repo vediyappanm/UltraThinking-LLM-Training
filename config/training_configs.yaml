@@ -1,0 +1,212 @@
+# Training Configurations for Different Scales
+
+# Development/Debug configuration
+debug:
+  model_config: "small"
+  data:
+    dataset_path: "input.txt"
+    tokenizer_type: "tiktoken"
+    tokenizer_name: "gpt2"
+    max_length: 1024
+    streaming: false
+    num_workers: 2
+    validation_split: 0.1
+    pack_sequences: true
+    preprocessing_num_workers: 4
+  
+  optim:
+    optimizer: "adamw"
+    learning_rate: 6e-4
+    weight_decay: 0.1
+    beta1: 0.9
+    beta2: 0.95
+    eps: 1e-8
+    clip_grad_norm: 1.0
+    warmup_steps: 100
+    lr_scheduler: "cosine"
+    total_steps: 1000
+    
+  training:
+    batch_size: 4
+    micro_batch_size: 2
+    gradient_accumulation_steps: 2
+    mixed_precision: "bf16"
+    compile_model: false
+    use_fsdp: false
+    use_deepspeed: false
+    checkpoint_interval: 100
+    eval_interval: 50
+    log_interval: 10
+    max_eval_batches: 10
+    seed: 42
+    dataloader_pin_memory: true
+    dataloader_drop_last: true
+    save_total_limit: 3
+    
+  experiment:
+    experiment_name: "debug_run"
+    output_dir: "outputs/debug"
+    use_wandb: false
+    sample_every: 100
+    sample_length: 100
+    sample_temperature: 0.8
+    sample_top_k: 50
+    sample_top_p: 0.9
+
+# Small scale training
+small_scale:
+  model_config: "small"
+  data:
+    dataset_path: "data/train.txt"
+    tokenizer_type: "tiktoken"
+    tokenizer_name: "gpt2"
+    max_length: 2048
+    streaming: true
+    num_workers: 8
+    validation_split: 0.05
+    pack_sequences: true
+    shuffle_buffer_size: 10000
+    preprocessing_num_workers: 16
+  
+  optim:
+    optimizer: "adamw"
+    learning_rate: 3e-4
+    weight_decay: 0.1
+    beta1: 0.9
+    beta2: 0.95
+    eps: 1e-8
+    clip_grad_norm: 1.0
+    warmup_steps: 2000
+    lr_scheduler: "cosine"
+    total_steps: 100000
+    
+  training:
+    batch_size: 64
+    micro_batch_size: 8
+    gradient_accumulation_steps: 8
+    mixed_precision: "bf16"
+    compile_model: true
+    use_fsdp: true
+    use_deepspeed: false
+    checkpoint_interval: 2000
+    eval_interval: 1000
+    log_interval: 50
+    max_eval_batches: 100
+    seed: 42
+    dataloader_pin_memory: true
+    dataloader_drop_last: true
+    save_total_limit: 5
+    
+  experiment:
+    experiment_name: "small_gpt"
+    output_dir: "outputs/small"
+    use_wandb: true
+    wandb_project: "advanced-gpt"
+    wandb_tags: ["small", "baseline"]
+    sample_every: 2000
+    sample_length: 200
+    sample_temperature: 0.8
+    sample_top_k: 50
+    sample_top_p: 0.9
+
+# Large scale training (Claude Opus style)
+opus_scale:
+  model_config: "opus"
+  data:
+    dataset_path: "data/large_corpus"
+    tokenizer_type: "tiktoken"
+    tokenizer_name: "cl100k_base"  # GPT-4 tokenizer
+    max_length: 8192
+    streaming: true
+    num_workers: 32
+    validation_split: 0.01
+    pack_sequences: true
+    shuffle_buffer_size: 100000
+    preprocessing_num_workers: 64
+    data_preprocessing:
+      quality_filtering: true
+      deduplication: true
+      pii_removal: true
+      content_filtering: true
+  
+  optim:
+    optimizer: "lion"  # More memory efficient for large models
+    learning_rate: 1e-4
+    weight_decay: 0.01
+    beta1: 0.95
+    beta2: 0.98
+    eps: 1e-8
+    clip_grad_norm: 1.0
+    warmup_steps: 10000
+    lr_scheduler: "cosine"
+    total_steps: 1000000
+    lr_scheduler_kwargs:
+      eta_min: 1e-6
+    
+  training:
+    batch_size: 2048  # Very large batch size
+    micro_batch_size: 1  # Small micro batch to fit in memory
+    gradient_accumulation_steps: 2048
+    mixed_precision: "bf16"
+    compile_model: true
+    use_fsdp: true
+    use_deepspeed: true
+    deepspeed_config: "config/deepspeed_z3.json"
+    checkpoint_interval: 5000
+    eval_interval: 2500
+    log_interval: 100
+    max_eval_batches: 200
+    seed: 42
+    dataloader_pin_memory: true
+    dataloader_drop_last: true
+    save_total_limit: 10
+    gradient_checkpointing: true
+    cpu_offload: true
+    
+  experiment:
+    experiment_name: "opus_scale_training"
+    output_dir: "outputs/opus"
+    use_wandb: true
+    wandb_project: "claude-opus-4"
+    wandb_tags: ["opus", "large-scale", "production"]
+    sample_every: 5000
+    sample_length: 500
+    sample_temperature: 0.7
+    sample_top_k: 40
+    sample_top_p: 0.95
+    
+  # Advanced features for large scale training
+  advanced:
+    use_flash_attention_2: true
+    use_ring_attention: true  # For very long sequences
+    use_mixture_of_experts: false
+    expert_config:
+      num_experts: 8
+      expert_capacity: 1.25
+      router_z_loss_coeff: 0.001
+    curriculum_learning:
+      enabled: true
+      stages:
+        - max_length: 1024
+          steps: 50000
+        - max_length: 2048
+          steps: 100000
+        - max_length: 4096
+          steps: 200000
+        - max_length: 8192
+          steps: 650000
+    
+  # Safety and alignment features
+  safety:
+    constitutional_ai: true
+    harmlessness_training: true
+    helpfulness_training: true
+    honesty_training: true
+    rlhf_config:
+      enabled: true
+      reward_model_path: "models/reward_model"
+      ppo_config:
+        learning_rate: 1e-5
+        batch_size: 512
+        ppo_epochs: 4
+        clip_range: 0.2

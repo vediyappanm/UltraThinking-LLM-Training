@@ -1,0 +1,131 @@
+# Model Architecture Configurations
+# State-of-the-art configurations for different model sizes
+
+# Small model for testing (GPT-2 Small equivalent)
+small:
+  vocab_size: 50304  # Padded to be divisible by 64
+  n_positions: 2048
+  n_embd: 768
+  n_layer: 12
+  n_head: 12
+  n_kv_head: 4  # Grouped Query Attention
+  rotary_dim: 64
+  intermediate_size: 3072
+  activation: "swiglu"
+  norm_type: "rmsnorm"
+  norm_eps: 1e-5
+  dropout: 0.0
+  attention_dropout: 0.0
+  residual_dropout: 0.1
+  embed_dropout: 0.1
+  tie_word_embeddings: true
+  use_cache: true
+  attention_bias: false
+  mlp_bias: false
+  flash_attention: true
+  sliding_window: null
+  rope_theta: 10000.0
+  rope_scaling: null
+
+# Medium model (GPT-2 Medium equivalent)
+medium:
+  vocab_size: 50304
+  n_positions: 4096
+  n_embd: 1024
+  n_layer: 24
+  n_head: 16
+  n_kv_head: 8
+  rotary_dim: 64
+  intermediate_size: 4096
+  activation: "swiglu"
+  norm_type: "rmsnorm"
+  norm_eps: 1e-5
+  dropout: 0.0
+  attention_dropout: 0.0
+  residual_dropout: 0.1
+  embed_dropout: 0.1
+  tie_word_embeddings: true
+  use_cache: true
+  attention_bias: false
+  mlp_bias: false
+  flash_attention: true
+  sliding_window: null
+  rope_theta: 10000.0
+
+# Large model (GPT-2 Large equivalent)
+large:
+  vocab_size: 50304
+  n_positions: 4096
+  n_embd: 1536
+  n_layer: 36
+  n_head: 24
+  n_kv_head: 8
+  rotary_dim: 64
+  intermediate_size: 6144
+  activation: "swiglu"
+  norm_type: "rmsnorm"
+  norm_eps: 1e-5
+  dropout: 0.0
+  attention_dropout: 0.0
+  residual_dropout: 0.1
+  embed_dropout: 0.1
+  tie_word_embeddings: true
+  use_cache: true
+  attention_bias: false
+  mlp_bias: false
+  flash_attention: true
+  sliding_window: null
+  rope_theta: 10000.0
+
+# XL model (GPT-2 XL equivalent)
+xl:
+  vocab_size: 50304
+  n_positions: 4096
+  n_embd: 2048
+  n_layer: 48
+  n_head: 32
+  n_kv_head: 8
+  rotary_dim: 64
+  intermediate_size: 8192
+  activation: "swiglu"
+  norm_type: "rmsnorm"
+  norm_eps: 1e-5
+  dropout: 0.0
+  attention_dropout: 0.0
+  residual_dropout: 0.1
+  embed_dropout: 0.1
+  tie_word_embeddings: true
+  use_cache: true
+  attention_bias: false
+  mlp_bias: false
+  flash_attention: true
+  sliding_window: null
+  rope_theta: 10000.0
+
+# Claude Opus 4 scale model (hypothetical)
+opus:
+  vocab_size: 100352  # Larger vocabulary
+  n_positions: 8192   # Longer context
+  n_embd: 4096
+  n_layer: 64
+  n_head: 32
+  n_kv_head: 8        # Aggressive GQA for efficiency
+  rotary_dim: 128
+  intermediate_size: 14336  # SwiGLU expansion
+  activation: "swiglu"
+  norm_type: "rmsnorm"
+  norm_eps: 1e-6
+  dropout: 0.0
+  attention_dropout: 0.0
+  residual_dropout: 0.05
+  embed_dropout: 0.05
+  tie_word_embeddings: false  # Separate output layer for large models
+  use_cache: true
+  attention_bias: false
+  mlp_bias: false
+  flash_attention: true
+  sliding_window: 4096  # Sliding window attention for efficiency
+  rope_theta: 500000.0  # Extended RoPE base for long context
+  rope_scaling:
+    type: "dynamic"
+    factor: 2.0
