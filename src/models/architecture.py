@@ -326,7 +326,12 @@ class AdvancedGPTModel(nn.Module):
         for i, (layer, past_key_value) in enumerate(zip(self.layers, past_key_values)):
             if self.config.gradient_checkpointing and self.training:
                 hidden_states, present_key_value = torch.utils.checkpoint.checkpoint(
-                    layer, hidden_states, attention_mask, use_cache, past_key_value
+                    layer,
+                    hidden_states,
+                    attention_mask,
+                    use_cache,
+                    past_key_value,
+                    use_reentrant=False,
                 )
             else:
                 hidden_states, present_key_value = layer(

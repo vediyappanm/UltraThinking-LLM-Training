@@ -116,12 +116,20 @@ def load_model_and_tokenizer(checkpoint_path, device='cuda'):
             tokenizer = SimpleTokenizer()
     
     print(f"Model loaded: {sum(p.numel() for p in model.parameters()):,} parameters")
-    print(f"Tokenizer: {getattr(tokenizer, 'vocab_size', len(tokenizer.chars))} vocab size")
+    # Support tiktoken Encoding (n_vocab) and SimpleTokenizer (vocab_size/chars)
+    tok_vs = None
+    for attr in ('vocab_size', 'n_vocab'):
+        if hasattr(tokenizer, attr):
+            tok_vs = getattr(tokenizer, attr)
+            break
+    if tok_vs is None:
+        tok_vs = len(getattr(tokenizer, 'chars', [])) or 'unknown'
+    print(f"Tokenizer: {tok_vs} vocab size")
     
     return model, tokenizer
 
 
-def interactive_chat(model, tokenizer, device):
+def interactive_chat(model, tokenizer, device, overrides=None):
     """Interactive chat interface"""
     generator = AdvancedGenerator(model, tokenizer, device)
     controllable = ControllableGenerator(model, tokenizer, device)
@@ -139,6 +147,18 @@ def interactive_chat(model, tokenizer, device):
     print("="*50)
     
     current_config = configs['balanced']
+    # Apply CLI overrides if provided
+    if overrides:
+        if 'max_new_tokens' in overrides and overrides['max_new_tokens'] is not None:
+            current_config.max_new_tokens = int(overrides['max_new_tokens'])
+        if 'temperature' in overrides and overrides['temperature'] is not None:
+            current_config.temperature = float(overrides['temperature'])
+        if 'top_k' in overrides and overrides['top_k'] is not None:
+            current_config.top_k = int(overrides['top_k'])
+        if 'top_p' in overrides and overrides['top_p'] is not None:
+            current_config.top_p = float(overrides['top_p'])
+        if 'do_sample' in overrides and overrides['do_sample'] is not None:
+            current_config.do_sample = bool(overrides['do_sample'])
     current_style = None
     conversation_history = ""
     
@@ -280,6 +300,12 @@ def main():
     parser.add_argument("--output", type=str, help="Output file for batch mode")
     parser.add_argument("--config", type=str, default='balanced', help="Generation config")
     parser.add_argument("--device", type=str, default='cuda', help="Device to use")
+    # Optional generation overrides
+    parser.add_argument("--max_new_tokens", type=int, default=None, help="Max new tokens to generate")
+    parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature")
+    parser.add_argument("--top_k", type=int, default=None, help="Top-k sampling")
+    parser.add_argument("--top_p", type=float, default=None, help="Top-p sampling")
+    parser.add_argument("--do_sample", type=int, default=None, help="1 to enable sampling, 0 to disable")
     
     args = parser.parse_args()
     
@@ -295,7 +321,14 @@ def main():
     
     # Run inference
     if args.mode == 'chat':
-        interactive_chat(model, tokenizer, device)
+        overrides = {
+            'max_new_tokens': args.max_new_tokens,
+            'temperature': args.temperature,
+            'top_k': args.top_k,
+            'top_p': args.top_p,
+            'do_sample': (None if args.do_sample is None else bool(args.do_sample)),
+        }
+        interactive_chat(model, tokenizer, device, overrides)
     elif args.mode == 'batch':
         if not args.prompts or not args.output:
             print("❌ Batch mode requires --prompts and --output arguments")

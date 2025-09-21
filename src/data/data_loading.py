@@ -65,6 +65,10 @@ class DataConfig:
     batch_size: int = 4
     use_hf: bool = False                   # set true to load a HF dataset by name in dataset_path
     hf_text_column: Optional[str] = None   # text column when using HF datasets
+    dataset_config_name: Optional[str] = None  # HF dataset configuration/subset name (e.g., "pubmed_abstracts" for the_pile)
+    # Optional split names
+    dataset_split_train: Optional[str] = None   # e.g., "train" or "train[:99%]"
+    dataset_split_val: Optional[str] = None     # e.g., "validation" or "train[-1%:]"
 
 
 # -----------------------------------------------------------------------------
@@ -329,16 +333,32 @@ def create_dataloaders(config: DataConfig, tokenizer: Optional[AdvancedTokenizer
     if config.streaming:
         if config.use_hf and HF_DATASETS_AVAILABLE:
             # HF streaming dataset (text column required)
-            hf = load_dataset(config.dataset_path, split='train', streaming=True)
+            train_split = config.dataset_split_train or 'train'
+            val_split = config.dataset_split_val  # may be None
+            if config.dataset_config_name:
+                hf_train = load_dataset(config.dataset_path, config.dataset_config_name, split=train_split, streaming=True)
+                hf_val = None
+                if val_split:
+                    try:
+                        hf_val = load_dataset(config.dataset_path, config.dataset_config_name, split=val_split, streaming=True)
+                    except Exception:
+                        hf_val = None
+            else:
+                hf_train = load_dataset(config.dataset_path, split=train_split, streaming=True)
+                hf_val = None
+                if val_split:
+                    try:
+                        hf_val = load_dataset(config.dataset_path, split=val_split, streaming=True)
+                    except Exception:
+                        hf_val = None
             text_col = config.hf_text_column
             assert text_col is not None, "hf_text_column must be provided when use_hf=True"
-            # write to temp file-like stream by iterating; then reuse StreamingTextDataset over a buffer of lines
-            # Simpler: build an IterableDataset that wraps HF streaming
+            # Build an IterableDataset that wraps HF streaming
             class HFStream(IterableDataset):
                 def __iter__(self_inner):
-                    buffer: List[Dict[str, torch.Tensor]] = []
                     token_buf: List[int] = []
-                    for ex in hf:
+                    reservoir: List[Dict[str, torch.Tensor]] = []
+                    for ex in hf_train:
                         raw = ex[text_col]
                         text = normalize_text(raw)
                         if config.quality_filtering:
@@ -352,34 +372,56 @@ def create_dataloaders(config: DataConfig, tokenizer: Optional[AdvancedTokenizer
                         if tok.eos_token_id is not None:
                             ids.append(tok.eos_token_id)
                         token_buf.extend(ids)
+                        # Emit items as soon as they are available
                         while len(token_buf) >= config.max_length + 1:
                             seq = token_buf[: config.max_length + 1]
                             item = {
                                 'input_ids': torch.tensor(seq[:-1], dtype=torch.long),
                                 'labels': torch.tensor(seq[1:], dtype=torch.long),
                             }
-                            buffer.append(item)
                             token_buf = token_buf[config.max_length:]
-                            if len(buffer) >= config.shuffle_buffer_size:
-                                random.shuffle(buffer)
-                                for it in buffer:
-                                    yield it
-                                buffer.clear()
-                    if len(token_buf) > 1:
-                        seq = token_buf[: config.max_length + 1]
-                        if len(seq) > 1:
-                            yield {
-                                'input_ids': torch.tensor(seq[:-1], dtype=torch.long),
-                                'labels': torch.tensor(seq[1:], dtype=torch.long),
-                            }
-                    if buffer:
-                        random.shuffle(buffer)
-                        for it in buffer:
-                            yield it
+                            # Lightweight shuffling via small reservoir
+                            if len(reservoir) < max(1, config.shuffle_buffer_size // 10):
+                                reservoir.append(item)
+                            else:
+                                # Randomly yield from reservoir and insert new item
+                                idx = random.randint(0, len(reservoir) - 1)
+                                yield reservoir[idx]
+                                reservoir[idx] = item
+                    # Drain any remaining items
+                    for it in reservoir:
+                        yield it
             train_iter = HFStream()
-            # For simplicity we don't split HF streaming; users can pass validation separately.
             train_loader = DataLoader(train_iter, batch_size=config.batch_size, num_workers=0)
-            val_loader = DataLoader([], batch_size=config.batch_size)
+            # Optional validation iterable
+            if hf_val is not None:
+                class HFValStream(IterableDataset):
+                    def __iter__(self_inner):
+                        token_buf: List[int] = []
+                        for ex in hf_val:
+                            raw = ex[text_col]
+                            text = normalize_text(raw)
+                            if config.quality_filtering:
+                                if not length_ok(text, config.min_length, config.max_length_filter):
+                                    continue
+                                if not passes_language_filter(text, config.language_filter):
+                                    continue
+                            ids = tok.encode(text)
+                            if not ids:
+                                continue
+                            if tok.eos_token_id is not None:
+                                ids.append(tok.eos_token_id)
+                            token_buf.extend(ids)
+                            while len(token_buf) >= config.max_length + 1:
+                                seq = token_buf[: config.max_length + 1]
+                                yield {
+                                    'input_ids': torch.tensor(seq[:-1], dtype=torch.long),
+                                    'labels': torch.tensor(seq[1:], dtype=torch.long),
+                                }
+                                token_buf = token_buf[config.max_length:]
+                val_loader = DataLoader(HFValStream(), batch_size=config.batch_size, num_workers=0)
+            else:
+                val_loader = DataLoader([], batch_size=config.batch_size)
             return train_loader, val_loader, {"vocab_size": tok.vocab_size, "tokenizer_type": tok.tokenizer_type}
         else:
             stream_ds = StreamingTextDataset(
@@ -402,10 +444,17 @@ def create_dataloaders(config: DataConfig, tokenizer: Optional[AdvancedTokenizer
 
     # Non-streaming: read all, tokenize, split
     if config.use_hf and HF_DATASETS_AVAILABLE:
-        ds = load_dataset(config.dataset_path, split='train')
+        train_split = config.dataset_split_train or 'train'
+        val_split = config.dataset_split_val
+        if config.dataset_config_name:
+            ds_train = load_dataset(config.dataset_path, config.dataset_config_name, split=train_split)
+            ds_val = load_dataset(config.dataset_path, config.dataset_config_name, split=val_split) if val_split else None
+        else:
+            ds_train = load_dataset(config.dataset_path, split=train_split)
+            ds_val = load_dataset(config.dataset_path, split=val_split) if val_split else None
         text_col = config.hf_text_column
         assert text_col is not None, "hf_text_column must be provided when use_hf=True"
-        texts = [normalize_text(r[text_col]) for r in ds]
+        texts = [normalize_text(r[text_col]) for r in ds_train]
     else:
         raw_text = _load_all_text_from_local(config.dataset_path)
         if not raw_text:
@@ -430,10 +479,17 @@ def create_dataloaders(config: DataConfig, tokenizer: Optional[AdvancedTokenizer
 
     token_ids = _tokenize_in_threads(texts, tok, workers=config.preprocessing_num_workers)
 
-    # Split tokens into train/val by proportion
-    split_idx = int(len(token_ids) * (1 - config.validation_split))
-    train_tokens = token_ids[:split_idx]
-    val_tokens = token_ids[split_idx:]
+    # Split tokens into train/val
+    if config.use_hf and HF_DATASETS_AVAILABLE and val_split:
+        # If a real validation split was provided in HF path, build val from that
+        val_texts = [normalize_text(r[text_col]) for r in ds_val] if ds_val is not None else []
+        val_token_ids = _tokenize_in_threads(val_texts, tok, workers=config.preprocessing_num_workers) if val_texts else []
+        train_tokens = token_ids
+        val_tokens = val_token_ids
+    else:
+        split_idx = int(len(token_ids) * (1 - config.validation_split))
+        train_tokens = token_ids[:split_idx]
+        val_tokens = token_ids[split_idx:]
 
     train_ds = PackedTextDataset(train_tokens, config.max_length)
     val_ds = PackedTextDataset(val_tokens, config.max_length)

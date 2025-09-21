@@ -28,6 +28,7 @@ from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 # Import our modules
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 from models.architecture import AdvancedGPTModel, ModelConfig, TransformerBlock
+from data.data_loading import DataConfig as DLDataConfig, create_dataloaders
 from training.optimizers import get_optimizer, get_scheduler
 
 try:
@@ -120,8 +121,18 @@ class OpusTrainer:
         self.setup_optimizer()
         
     def load_config(self, config_path: str = None):
-        """Load configuration from YAML files"""
-        # Load model configs
+        """Load configuration.
+        If a --config YAML path is provided, load and return it directly.
+        Otherwise, fall back to legacy behavior (debug entry or hardcoded defaults).
+        """
+        # 1) If --config provided, load single-file config
+        if config_path and os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                loaded = yaml.safe_load(f)
+                if isinstance(loaded, dict) and loaded:
+                    return loaded
+
+        # 2) Legacy behavior: load aggregated configs
         model_configs_path = "config/model_configs.yaml"
         training_configs_path = "config/training_configs.yaml"
         
@@ -145,7 +156,7 @@ class OpusTrainer:
                 config['model_config_dict'] = model_configs[model_config_name]
             return config
         
-        # Fallback config
+        # 3) Fallback hardcoded config
         return {
             'model_config': 'small',
             'model_config_dict': {
@@ -263,38 +274,55 @@ class OpusTrainer:
         """Setup data loading"""
         data_config = self.config['data']
         
-        # Load text data
+        # If using Hugging Face datasets via advanced loader
+        if data_config.get('use_hf', False):
+            logger.info("Using advanced data loader with Hugging Face datasets")
+            dl_cfg = DLDataConfig(
+                dataset_path=data_config.get('dataset_path', 'EleutherAI/the_pile'),
+                dataset_config_name=data_config.get('dataset_config_name'),
+                use_hf=True,
+                hf_text_column=data_config.get('hf_text_column', 'text'),
+                tokenizer_type=data_config.get('tokenizer_type', 'tiktoken'),
+                tokenizer_name=data_config.get('tokenizer_name', 'gpt2'),
+                sp_model_path=data_config.get('sp_model_path'),
+                max_length=data_config.get('max_length', 1024),
+                streaming=data_config.get('streaming', True),
+                batch_size=self.config['training'].get('micro_batch_size') or self.config['training']['batch_size'],
+                validation_split=data_config.get('validation_split', 0.01),
+                dataset_split_train=data_config.get('dataset_split_train'),
+                dataset_split_val=data_config.get('dataset_split_val'),
+                quality_filtering=data_config.get('quality_filtering', False),
+                deduplication=data_config.get('deduplication', False),
+                shuffle_buffer_size=data_config.get('shuffle_buffer_size', 1000),
+                seed=self.config['training'].get('seed', 42),
+            )
+            self.train_dataloader, self.val_dataloader, info = create_dataloaders(dl_cfg)
+            # Record vocab size for model setup
+            self.vocab_size = info.get('vocab_size')
+            logger.info(f"HF dataset ready | vocab_size: {self.vocab_size}")
+            return
+
+        # Default local text path behavior (existing simple flow)
         dataset_path = data_config['dataset_path']
         if not os.path.exists(dataset_path):
             logger.warning(f"Dataset path {dataset_path} not found, creating dummy data")
             with open(dataset_path, 'w') as f:
                 f.write("This is a sample text for training. " * 1000)
-        
         with open(dataset_path, 'r', encoding='utf-8') as f:
             text = f.read()
-        
-        # Setup tokenizer
         self.tokenizer = AdvancedTokenizer(
             tokenizer_type=data_config['tokenizer_type'],
             tokenizer_name=data_config['tokenizer_name'],
             fallback_text=text
         )
-        
-        # Tokenize and split data
         tokens = self.tokenizer.encode(text)
         split_idx = int(len(tokens) * (1 - data_config['validation_split']))
-        
         train_tokens = tokens[:split_idx]
         val_tokens = tokens[split_idx:]
-        
-        # Create datasets
         max_length = data_config['max_length']
         self.train_dataset = TextDataset(train_tokens, max_length)
         self.val_dataset = TextDataset(val_tokens, max_length)
-        
-        # Create dataloaders
         batch_size = self.config['training']['micro_batch_size'] or self.config['training']['batch_size']
-        
         self.train_dataloader = DataLoader(
             self.train_dataset,
             batch_size=batch_size,
@@ -303,7 +331,6 @@ class OpusTrainer:
             pin_memory=True,
             drop_last=True
         )
-        
         self.val_dataloader = DataLoader(
             self.val_dataset,
             batch_size=batch_size,
@@ -311,14 +338,17 @@ class OpusTrainer:
             num_workers=2,
             pin_memory=True
         )
-        
         logger.info(f"Loaded dataset: {len(train_tokens)} train tokens, {len(val_tokens)} val tokens")
         logger.info(f"Vocab size: {self.tokenizer.vocab_size}")
     
     def setup_model(self):
         """Setup model"""
         model_config_dict = self.config['model_config_dict']
-        model_config_dict['vocab_size'] = self.tokenizer.vocab_size
+        # Prefer vocab_size from advanced loader if set, else from tokenizer
+        if hasattr(self, 'vocab_size') and self.vocab_size is not None:
+            model_config_dict['vocab_size'] = int(self.vocab_size)
+        else:
+            model_config_dict['vocab_size'] = self.tokenizer.vocab_size
         
         model_config = ModelConfig(**model_config_dict)
         self.model = AdvancedGPTModel(model_config)
@@ -384,20 +414,25 @@ class OpusTrainer:
         return {'eval_loss': avg_loss, 'eval_perplexity': perplexity}
     
     @torch.no_grad()
-    def generate_sample(self):
-        """Generate text sample"""
+    def generate_sample(self) -> str:
+        """Generate a sample text to inspect training progress"""
+        # Determine vocab size without assuming a local tokenizer exists
+        if hasattr(self, 'tokenizer') and getattr(self, 'tokenizer') is not None:
+            vs = int(self.tokenizer.vocab_size)
+        elif hasattr(self, 'vocab_size') and getattr(self, 'vocab_size') is not None:
+            vs = int(self.vocab_size)
+        else:
+            vs = int(getattr(self.model.config, 'vocab_size', 50257))
+
+        start_tokens = torch.randint(0, min(1000, vs), (1, 1), device=self.device)
+        generated = start_tokens
         self.model.eval()
-        
-        # Start with random token
-        start_tokens = torch.randint(0, min(1000, self.tokenizer.vocab_size), (1, 1), device=self.device)
-        generated = start_tokens.clone()
-        
-        sample_length = self.config['experiment']['sample_length']
-        temperature = self.config['experiment']['sample_temperature']
-        top_k = self.config['experiment']['sample_top_k']
+        max_new_tokens = self.config['experiment'].get('sample_length', 100)
+        temperature = self.config['experiment'].get('sample_temperature', 0.8)
+        top_k = self.config['experiment'].get('sample_top_k', 50)
         top_p = self.config['experiment']['sample_top_p']
         
-        for _ in range(sample_length):
+        for _ in range(max_new_tokens):
             with torch.cuda.amp.autocast(enabled=self.scaler is not None):
                 outputs = self.model(input_ids=generated, use_cache=False)
                 logits = outputs['logits']
@@ -431,8 +466,18 @@ class OpusTrainer:
             if generated.size(1) > self.config['data']['max_length']:
                 generated = generated[:, -self.config['data']['max_length']:]
         
-        # Decode
-        generated_text = self.tokenizer.decode(generated[0].cpu().tolist())
+        # Decode tokens to text
+        tokens_out = generated[0].cpu().tolist()
+        if hasattr(self, 'tokenizer') and getattr(self, 'tokenizer') is not None:
+            generated_text = self.tokenizer.decode(tokens_out)
+        else:
+            try:
+                import tiktoken  # type: ignore
+                enc = tiktoken.get_encoding('gpt2')
+                generated_text = enc.decode(tokens_out)
+            except Exception:
+                # Fallback: show token ids
+                generated_text = ' '.join(str(t) for t in tokens_out)
         self.model.train()
         return generated_text
     
