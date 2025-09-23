@@ -106,6 +106,11 @@ def rotate_half(x):
 
 def apply_rotary_pos_emb(q, k, cos, sin):
     """Apply rotary positional embedding to query and key tensors."""
+    # Slice cos/sin to match the head dimension
+    head_dim = q.shape[-1]
+    cos = cos[..., :head_dim]
+    sin = sin[..., :head_dim]
+    
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed

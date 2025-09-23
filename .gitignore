@@ -54,6 +54,31 @@ logs/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# ML/AI specific
+wandb/
+mlruns/
+tensorboard_logs/
+*.safetensors
+*.onnx
+*.tflite
+*.pb
+
+# Dataset cache
+.cache/
+datasets_cache/
+transformers_cache/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
 # Local development
 .DS_Store
 Thumbs.db
