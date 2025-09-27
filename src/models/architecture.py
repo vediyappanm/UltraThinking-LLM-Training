@@ -201,7 +201,8 @@ class GroupedQueryAttention(nn.Module):
             attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
             
             if attention_mask is not None:
-                attn_weights = attn_weights + attention_mask
+                # Ensure mask dtype matches weights to avoid NaNs in mixed precision
+                attn_weights = attn_weights + attention_mask.to(attn_weights.dtype)
             
             attn_weights = F.softmax(attn_weights, dim=-1)
             attn_weights = self.attention_dropout(attn_weights)
@@ -318,19 +319,28 @@ class AdvancedGPTModel(nn.Module):
         hidden_states = self.embed_dropout(hidden_states)
 
         # Build final 4D additive attention mask combining causal and padding masks
-        dtype_min = torch.finfo(hidden_states.dtype).min if hidden_states.is_floating_point() else -1e9
+        # Use finite large negatives for stability with fp16/bf16
+        if hidden_states.dtype in (torch.float16, torch.bfloat16):
+            mask_value = -1e4
+        else:
+            mask_value = -1e9
         # Causal mask: shape (1, 1, seq, seq)
         causal_mask = torch.triu(
-            torch.full((seq_length, seq_length), float('-inf'), device=input_ids.device),
+            torch.full((seq_length, seq_length), mask_value, device=input_ids.device),
             diagonal=1
         )[None, None, :, :]
 
         if attention_mask is not None:
             # attention_mask expected as (batch, seq) with 1 for tokens, 0 for padding
-            # Convert to additive mask: (batch, 1, 1, seq)
-            attn = (1 - attention_mask.to(hidden_states.dtype)) * float('-inf')
-            attn = attn[:, None, None, :]
-            attention_mask = causal_mask + attn
+            attn1d = attention_mask.to(hidden_states.dtype)
+            # Key-side padding mask: (batch, 1, 1, seq)
+            key_mask = (1 - attn1d) * mask_value
+            key_mask = key_mask[:, None, None, :]
+            # Query-side padding mask: (batch, 1, seq, 1)
+            query_mask = (1 - attn1d) * mask_value
+            query_mask = query_mask[:, None, :, None]
+            # Combine
+            attention_mask = causal_mask + key_mask + query_mask
         else:
             attention_mask = causal_mask
 

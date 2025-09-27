@@ -374,16 +374,23 @@ class UltraThinkTrainer:
                 else:
                     outputs = self.model(**batch)
                     loss = outputs['loss']
-                
+
                 # Scale loss for gradient accumulation
                 loss = loss / self.args.gradient_accumulation_steps
-                
+
+                # NaN/Inf guard - skip unstable batches
+                if not torch.isfinite(loss):
+                    logger.warning(f"Skipping batch {batch_idx} due to non-finite loss.")
+                    if hasattr(self, 'optimizer'):
+                        self.optimizer.zero_grad(set_to_none=True)
+                    continue
+
                 # Backward pass
                 if self.scaler:
                     self.scaler.scale(loss).backward()
                 else:
                     loss.backward()
-                
+
                 # Gradient accumulation
                 if (batch_idx + 1) % self.args.gradient_accumulation_steps == 0:
                     # Gradient clipping
@@ -394,14 +401,13 @@ class UltraThinkTrainer:
                             self.model.parameters(),
                             self.args.gradient_clipping
                         )
-                    
                     # Optimizer step
                     if self.scaler:
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
                     else:
                         self.optimizer.step()
-                    
+
                     self.scheduler.step()
                     self.optimizer.zero_grad()
             
