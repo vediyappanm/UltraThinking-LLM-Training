@@ -254,7 +254,7 @@ class UltraThinkTrainer:
         logger.info(f"Loading {self.args.dataset} dataset...")
         
         # Import dataset utilities
-        from src.data.datasets import create_dataset, DATASET_CONFIGS, DatasetConfig
+        from src.data.datasets import create_dataset, create_mixed_dataset, DATASET_CONFIGS, DatasetConfig
         
         if self.args.dataset == "dummy":
             # Use dummy dataset for testing
@@ -281,6 +281,52 @@ class UltraThinkTrainer:
             val_dataset = create_dataset(config, "train")  # Use same data, will be split
             logger.info(f"Using custom dataset from {self.args.data_path}")
         
+        elif self.args.mix_datasets:
+            # Mix multiple datasets according to weights
+            pairs = [p.strip() for p in self.args.mix_datasets.split(',') if p.strip()]
+            configs = {}
+            weights = {}
+            for p in pairs:
+                if ':' not in p:
+                    logger.warning(f"Ignoring malformed mix entry '{p}', expected format name:weight")
+                    continue
+                name, w = p.split(':', 1)
+                name = name.strip()
+                try:
+                    weight = float(w)
+                except ValueError:
+                    logger.warning(f"Invalid weight '{w}' for dataset '{name}', skipping")
+                    continue
+                if name not in DATASET_CONFIGS:
+                    logger.warning(f"Unknown dataset '{name}' in mix; available: {list(DATASET_CONFIGS.keys())}")
+                    continue
+                base = DATASET_CONFIGS[name]
+                # Clone and apply global overrides
+                cfg = DatasetConfig(
+                    name=base.name,
+                    subset=base.subset,
+                    split_train=base.split_train,
+                    split_val=base.split_val,
+                    split_test=base.split_test,
+                    text_column=base.text_column,
+                    max_length=self.args.max_seq_length,
+                    tokenizer_name=self.args.tokenizer_name,
+                    streaming=base.streaming,
+                    cache_dir=base.cache_dir,
+                    num_proc=base.num_proc,
+                    local_path=None,
+                    file_type='auto',
+                    min_length=base.min_length,
+                    max_samples=self.args.max_samples
+                )
+                configs[name] = cfg
+                weights[name] = weight
+            if not configs:
+                raise ValueError("--mix_datasets provided but no valid datasets parsed")
+            train_dataset = create_mixed_dataset(configs, weights, split='train')
+            val_dataset = create_mixed_dataset(configs, weights, split='validation')
+            logger.info(f"Using mixed datasets: {', '.join([f'{k}:{weights[k]}' for k in configs.keys()])}")
+
         else:
             # Use predefined dataset configuration
             if self.args.dataset in DATASET_CONFIGS:
@@ -672,12 +718,13 @@ def parse_args():
     # Data settings
     parser.add_argument('--dataset', type=str, default='wikitext', 
                        help='Dataset to use (wikitext, openwebtext, pile, c4, bookcorpus, dummy, custom)')
+    parser.add_argument('--mix_datasets', type=str, default=None,
+                       help='Comma-separated list of dataset:weight pairs to mix, e.g. "wikitext:0.5,openwebtext:0.5". Overrides --dataset if set.')
     parser.add_argument('--dataset_subset', type=str, default=None, help='Dataset subset/config name')
     parser.add_argument('--data_path', type=str, default=None, help='Path to custom dataset file')
     parser.add_argument('--text_column', type=str, default='text', help='Column name containing text')
     parser.add_argument('--tokenizer_name', type=str, default='gpt2', help='Tokenizer to use')
     parser.add_argument('--max_samples', type=int, default=None, help='Maximum number of samples to use')
-    parser.add_argument('--streaming', action='store_true', help='Use streaming for large datasets')
 
     parser.add_argument('--train_samples', type=int, default=10000, help='Number of training samples (for dummy dataset)')
     parser.add_argument('--val_samples', type=int, default=1000, help='Number of validation samples (for dummy dataset)')
