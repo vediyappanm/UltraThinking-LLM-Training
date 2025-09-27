@@ -57,8 +57,9 @@ DATASET_CONFIGS = {
         max_length=1024,
         streaming=True
     ),
+    # Use a maintained mirror of OpenWebText
     "openwebtext": DatasetConfig(
-        name="openwebtext",
+        name="Skylion007/openwebtext",
         subset=None,
         text_column="text",
         max_length=1024,
@@ -78,8 +79,9 @@ DATASET_CONFIGS = {
         max_length=512,
         streaming=True
     ),
+    # BookCorpus script is deprecated on HF; use the open variant
     "bookcorpus": DatasetConfig(
-        name="bookcorpus",
+        name="bookcorpusopen",
         subset=None,
         text_column="text",
         max_length=1024,
@@ -90,6 +92,14 @@ DATASET_CONFIGS = {
         subset="unshuffled_deduplicated_en",
         text_column="text",
         max_length=512,
+        streaming=True
+    ),
+    # Wikipedia English snapshot
+    "wikipedia": DatasetConfig(
+        name="wikimedia/wikipedia",
+        subset="20220301.en",
+        text_column="text",
+        max_length=1024,
         streaming=True
     ),
     "dummy": DatasetConfig(
@@ -164,18 +174,28 @@ class TextDataset(Dataset):
         logger.info(f"Loading {self.config.name} dataset from Hugging Face...")
         
         try:
-            if self.config.subset:
+            target_name = self.config.name
+            target_subset = self.config.subset
+            # Legacy to new mapping if needed
+            legacy_map = {
+                "openwebtext": "Skylion007/openwebtext",
+                "bookcorpus": "bookcorpusopen",
+            }
+            if target_name in legacy_map:
+                target_name = legacy_map[target_name]
+
+            if target_subset:
                 dataset = load_dataset(
-                    self.config.name, 
-                    self.config.subset,
+                    target_name,
+                    target_subset,
                     split=self.split,
                     streaming=self.config.streaming,
                     cache_dir=self.config.cache_dir
                 )
             else:
                 dataset = load_dataset(
-                    self.config.name,
-                    split=self.split, 
+                    target_name,
+                    split=self.split,
                     streaming=self.config.streaming,
                     cache_dir=self.config.cache_dir
                 )
