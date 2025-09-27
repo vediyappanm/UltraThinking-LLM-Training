@@ -317,12 +317,22 @@ class AdvancedGPTModel(nn.Module):
         hidden_states = self.embed_tokens(input_ids)
         hidden_states = self.embed_dropout(hidden_states)
 
-        # Create causal mask
-        if attention_mask is None:
-            attention_mask = torch.triu(
-                torch.full((seq_length, seq_length), float('-inf'), device=input_ids.device),
-                diagonal=1
-            )
+        # Build final 4D additive attention mask combining causal and padding masks
+        dtype_min = torch.finfo(hidden_states.dtype).min if hidden_states.is_floating_point() else -1e9
+        # Causal mask: shape (1, 1, seq, seq)
+        causal_mask = torch.triu(
+            torch.full((seq_length, seq_length), float('-inf'), device=input_ids.device),
+            diagonal=1
+        )[None, None, :, :]
+
+        if attention_mask is not None:
+            # attention_mask expected as (batch, seq) with 1 for tokens, 0 for padding
+            # Convert to additive mask: (batch, 1, 1, seq)
+            attn = (1 - attention_mask.to(hidden_states.dtype)) * float('-inf')
+            attn = attn[:, None, None, :]
+            attention_mask = causal_mask + attn
+        else:
+            attention_mask = causal_mask
 
         # Transform through layers
         past_key_values = past_key_values if past_key_values is not None else [None] * len(self.layers)
