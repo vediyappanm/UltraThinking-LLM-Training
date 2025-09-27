@@ -184,21 +184,28 @@ class TextDataset(Dataset):
             if target_name in legacy_map:
                 target_name = legacy_map[target_name]
 
-            if target_subset:
-                dataset = load_dataset(
-                    target_name,
-                    target_subset,
-                    split=self.split,
-                    streaming=self.config.streaming,
-                    cache_dir=self.config.cache_dir
-                )
-            else:
-                dataset = load_dataset(
-                    target_name,
-                    split=self.split,
-                    streaming=self.config.streaming,
-                    cache_dir=self.config.cache_dir
-                )
+            # Common kwargs
+            kwargs = {
+                "split": self.split,
+                "streaming": self.config.streaming,
+                "cache_dir": self.config.cache_dir,
+            }
+
+            # Try with trust_remote_code if supported (Datasets < 3.x)
+            def try_load(with_trust: bool):
+                load_kwargs = dict(kwargs)
+                if with_trust:
+                    load_kwargs["trust_remote_code"] = True
+                if target_subset:
+                    return load_dataset(target_name, target_subset, **load_kwargs)
+                else:
+                    return load_dataset(target_name, **load_kwargs)
+
+            try:
+                dataset = try_load(with_trust=True)
+            except TypeError:
+                # trust_remote_code not supported, try without
+                dataset = try_load(with_trust=False)
             
             # Convert to list if not streaming
             if not self.config.streaming:
