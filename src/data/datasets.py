@@ -233,6 +233,9 @@ class TextDataset(Dataset):
         
         # For language modeling, labels are the same as input_ids
         labels = input_ids.clone()
+        # IMPORTANT: ignore loss on padding positions
+        if attention_mask is not None:
+            labels = labels.masked_fill(attention_mask == 0, -100)
         
         return {
             'input_ids': input_ids,
