@@ -65,8 +65,22 @@ DATASET_CONFIGS = {
         max_length=1024,
         streaming=True
     ),
+    "slim-pajama": DatasetConfig(
+        name="cerebras/SlimPajama-627B",
+        subset=None,
+        text_column="text",
+        max_length=2048,
+        streaming=True
+    ),
     "pile": DatasetConfig(
         name="EleutherAI/pile",
+        subset=None,
+        text_column="text",
+        max_length=2048,
+        streaming=True
+    ),
+    "pile-unc": DatasetConfig(
+        name="monology/pile-uncopyrighted",
         subset=None,
         text_column="text",
         max_length=2048,
@@ -97,7 +111,7 @@ DATASET_CONFIGS = {
     # Wikipedia English snapshot
     "wikipedia": DatasetConfig(
         name="wikimedia/wikipedia",
-        subset="20220301.en",
+        subset="20231101.en",
         text_column="text",
         max_length=1024,
         streaming=True
@@ -148,25 +162,57 @@ class TextDataset(Dataset):
         return [{"text": text} for text in dummy_texts]
     
     def _load_local_data(self):
-        """Load data from local files"""
-        logger.info(f"Loading local data from {self.config.local_path}")
+        """Load data from local files or remote URLs.
+        Supports:
+        - Local JSONL/TXT small files (read directly)
+        - HTTP/HTTPS URLs or local globs via datasets.load_dataset with streaming
+        - Multiple files via comma-separated list
+        """
+        path = self.config.local_path
+        logger.info(f"Loading local/remote data from {path}")
+
+        # Multiple files separated by commas
+        if "," in path:
+            paths = [p.strip() for p in path.split(",") if p.strip()]
+        else:
+            paths = [path]
+
+        def is_remote(p: str) -> bool:
+            return p.startswith("http://") or p.startswith("https://")
+
+        # If any path is remote or contains a wildcard, use datasets.load_dataset with streaming
+        if any(is_remote(p) or ("*" in p) for p in paths):
+            # Auto-detect builder by extension
+            sample = paths[0]
+            lower = sample.lower()
+            if lower.endswith(".parquet"):
+                builder = "parquet"
+            elif lower.endswith(".jsonl") or lower.endswith(".json") or lower.endswith(".jsonl.zst") or lower.endswith(".jsonl.gz"):
+                builder = "json"
+            else:
+                # Default to json for text datasets
+                builder = "json"
+
+            logger.info(f"Using datasets.load_dataset builder='{builder}' with streaming for data_files={paths}")
+            dataset = load_dataset(builder, data_files=paths, split=self.split, streaming=True)
+            return dataset
+
+        # Otherwise treat as plain local file(s) for small data
         data = []
-        
-        if self.config.file_type == "json":
-            with open(self.config.local_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    item = json.loads(line)
-                    if self.config.text_column in item:
-                        data.append({self.config.text_column: item[self.config.text_column]})
-        
-        elif self.config.file_type == "txt":
-            with open(self.config.local_path, 'r', encoding='utf-8') as f:
-                text = f.read()
-                # Split into chunks
-                chunks = text.split('\n\n')  # Split by paragraphs
-                data = [{self.config.text_column: chunk.strip()} for chunk in chunks if len(chunk.strip()) > self.config.min_length]
-        
-        logger.info(f"Loaded {len(data)} samples from local file")
+        for p in paths:
+            if self.config.file_type == "json":
+                with open(p, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        item = json.loads(line)
+                        if self.config.text_column in item:
+                            data.append({self.config.text_column: item[self.config.text_column]})
+            elif self.config.file_type == "txt":
+                with open(p, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                    chunks = text.split('\n\n')
+                    data.extend([{self.config.text_column: chunk.strip()} for chunk in chunks if len(chunk.strip()) > self.config.min_length])
+
+        logger.info(f"Loaded {len(data)} samples from local files")
         return data
     
     def _load_hf_data(self):

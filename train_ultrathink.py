@@ -22,24 +22,25 @@ from pathlib import Path
 # Dummy dataset for demonstration (moved to module level for Windows multiprocessing)
 class DummyDataset:
     """Dummy dataset for demonstration"""
-    def __init__(self, size=10000, seq_len=512):
-        self.size = size
-        self.seq_len = seq_len
-    
+    def __init__(self, size: int = 10000, seq_len: int = 512, vocab_size: int = 50257):
+        self.size = int(size)
+        self.seq_len = int(seq_len)
+        self.vocab_size = int(vocab_size)
+
     def __len__(self):
         return self.size
-    
-    def __getitem__(self, idx):
+
+    def __getitem__(self, idx: int):
+        # Return a simple language modeling batch with input_ids, attention_mask, and labels
+        input_ids = torch.randint(low=0, high=self.vocab_size, size=(self.seq_len,), dtype=torch.long)
+        attention_mask = torch.ones(self.seq_len, dtype=torch.long)
+        labels = input_ids.clone()
         return {
-            'input_ids': torch.randint(0, 1000, (self.seq_len,)),
-            'labels': torch.randint(0, 1000, (self.seq_len,))
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
+            'labels': labels,
         }
 
-# Setup logging first
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 # Add src to path
@@ -51,6 +52,7 @@ try:
     from src.models.architecture import ModelConfig
     from src.models.moe_advanced import ExpertConfig
     from src.models.multimodal import MultiModalConfig
+    from src.models.dynamic_reasoning import DynamicReasoningEngine
     from src.training.distributed_4d import DistributedConfig, DistributedTrainer
     from src.training.rlhf_advanced import RLHF2System, RLHFConfig
     from src.data.synthetic_generation import SyntheticDataEngine, SyntheticDataConfig
@@ -70,31 +72,42 @@ class UltraThinkTrainer:
         # Initialize distributed training if available
         self.setup_distributed()
         
+        # Device setup
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda', self.local_rank)
+        else:
+            self.device = torch.device('cpu')
+        
+        # Start epoch default
+        self.start_epoch = 0
+        
         # Create configurations
         self.config = self.create_config()
         
-        # Initialize model
+        # Initialize or load model
         logger.info("Initializing ULTRATHINK model...")
-        self.model = UltraThinkModel(self.config)
+        if self.args.init_from_model_dir:
+            logger.info(f"Loading model from {self.args.init_from_model_dir}")
+            self.model = UltraThinkModel.from_pretrained(self.args.init_from_model_dir)
+            # Optionally ensure DRE is available if requested
+            if self.args.enable_dre and getattr(self.model.core, 'dre', None) is None:
+                try:
+                    self.model.core.dre = DynamicReasoningEngine(
+                        base_model=self.model.core.base_model,
+                        config={'hidden_dim': self.config.model_config.n_embd}
+                    )
+                    logger.info("Attached DynamicReasoningEngine to loaded model (untrained router).")
+                except Exception as e:
+                    logger.warning(f"Could not attach DRE to loaded model: {e}")
+        else:
+            # Fresh model initialization
+            self.model = UltraThinkModel(self.config)
         
-        # Move to device
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = self.model.to(self.device)
-        
-        # Setup distributed training
-        if self.args.distributed:
-            self.setup_distributed_model()
-        
-        # Initialize components
+        # Move model to device
+        self.model.to(self.device)
+
+        # Initialize training components (optimizer, scheduler, AMP scaler, etc.)
         self.setup_training_components()
-        
-        # Initialize wandb if requested
-        if self.args.use_wandb and self.is_main_process():
-            wandb.init(
-                project="ultrathink",
-                name=self.args.run_name,
-                config=self.config.__dict__
-            )
     
     def setup_distributed(self):
         """Setup distributed training environment"""
@@ -612,29 +625,33 @@ class UltraThinkTrainer:
         
         best_val_loss = float('inf')
         
-        for epoch in range(self.args.num_epochs):
-            logger.info(f"Epoch {epoch + 1}/{self.args.num_epochs}")
-            
-            # Training
+        def run_one_epoch(epoch: int):
+            nonlocal best_val_loss
+            logger.info(f"Epoch {epoch + 1}")
             train_loss = self.train_epoch(epoch)
             logger.info(f"Training loss: {train_loss:.4f}")
-            
-            # Validation
             val_loss = self.validate()
             logger.info(f"Validation loss: {val_loss:.4f}")
-            
-            # Save checkpoint
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 self.save_checkpoint(epoch, val_loss)
-            
-            # RLHF phase (every N epochs)
             if (epoch + 1) % self.args.rlhf_frequency == 0:
                 self.run_rlhf_training()
-            
-            # Evaluation (every N epochs)
             if (epoch + 1) % self.args.eval_frequency == 0:
                 self.evaluate()
+
+        if self.args.continuous:
+            logger.info("Continuous training enabled: will run indefinitely until interrupted.")
+            epoch = self.start_epoch
+            try:
+                while True:
+                    run_one_epoch(epoch)
+                    epoch += 1
+            except KeyboardInterrupt:
+                logger.info("Continuous training interrupted by user.")
+        else:
+            for epoch in range(self.start_epoch, self.args.num_epochs):
+                run_one_epoch(epoch)
         
         logger.info("Training completed!")
         
@@ -725,6 +742,7 @@ def parse_args():
     parser.add_argument('--text_column', type=str, default='text', help='Column name containing text')
     parser.add_argument('--tokenizer_name', type=str, default='gpt2', help='Tokenizer to use')
     parser.add_argument('--max_samples', type=int, default=None, help='Maximum number of samples to use')
+    parser.add_argument('--streaming', action='store_true', help='Enable streaming mode for HF datasets (recommended for large datasets like The Pile)')
 
     parser.add_argument('--train_samples', type=int, default=10000, help='Number of training samples (for dummy dataset)')
     parser.add_argument('--val_samples', type=int, default=1000, help='Number of validation samples (for dummy dataset)')
@@ -741,6 +759,11 @@ def parse_args():
 
     # Output
     parser.add_argument('--output_dir', type=str, default='./outputs/ultrathink')
+    
+    # Initialization & resume
+    parser.add_argument('--init_from_model_dir', type=str, default=None, help='Path to a saved model (final_model dir) to initialize from')
+    parser.add_argument('--resume_checkpoint', type=str, default=None, help='Path to a training checkpoint .pt to resume from')
+    parser.add_argument('--continuous', action='store_true', help='Train indefinitely until interrupted')
     
     return parser.parse_args()
 

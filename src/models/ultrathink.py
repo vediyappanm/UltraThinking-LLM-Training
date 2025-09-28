@@ -176,6 +176,8 @@ class UltraThinkCore(nn.Module):
         # Determine if we should use DRE
         if use_dre is None:
             use_dre = self.config.enable_dre and self.dre is not None
+        # Hard guard: only use DRE if the module exists
+        use_dre = bool(use_dre) and (self.dre is not None)
         
         # Determine if we should enforce safety
         if enforce_safety is None:
@@ -191,6 +193,12 @@ class UltraThinkCore(nn.Module):
                 return_dict=True
             )
             hidden_states = mm_outputs['hidden_states']
+            # Provide a minimal routing_info placeholder for UI
+            routing_info = {
+                'chosen_path': 'multimodal',
+                'used_dre': False,
+                'note': 'multimodal_path_no_dre'
+            }
             
         elif input_ids is not None:
             # Text-only path
@@ -220,27 +228,32 @@ class UltraThinkCore(nn.Module):
                 )
             
             hidden_states = base_outputs.get('hidden_states')
-            
-        else:
-            raise ValueError("Either input_ids or inputs must be provided")
-        
-        # Apply MoE layers if enabled
-        if self.moe_layers and hidden_states is not None:
+            # Create/normalize routing_info for UI visibility
+            routing_info = None
+            if isinstance(base_outputs, dict) and 'routing_info' in base_outputs:
+                routing_info = base_outputs['routing_info']
+            else:
+                routing_info = {
+                    'chosen_path': 'base',
+                    'used_dre': False,
+                    'note': 'dre_unavailable_or_no_routing_info'
+                }
             total_aux_loss = 0
-            
-            for layer_idx_str, moe_layer in self.moe_layers.items():
-                layer_idx = int(layer_idx_str)
-                
-                # Apply MoE at specific layers
-                if layer_idx < hidden_states.shape[1]:  # Check if layer exists
-                    moe_output, aux_loss = moe_layer(hidden_states)
-                    hidden_states = moe_output
+            # Apply MoE layers only if available
+            if self.moe_layers is not None:
+                for layer_idx_str, moe_layer in self.moe_layers.items():
+                    layer_idx = int(layer_idx_str)
                     
-                    if aux_loss is not None:
-                        total_aux_loss += aux_loss
+                    # Apply MoE at specific layers
+                    if layer_idx < hidden_states.shape[1]:  # Check if layer exists
+                        moe_output, aux_loss = moe_layer(hidden_states)
+                        hidden_states = moe_output
+                        
+                        if aux_loss is not None:
+                            total_aux_loss += aux_loss
         
-        # Constitutional safety check
-        if enforce_safety and hidden_states is not None:
+        # Constitutional safety check (only if CRC is available)
+        if enforce_safety and (self.crc is not None) and hidden_states is not None:
             crc_outputs = self.crc(
                 input_ids=input_ids if input_ids is not None else inputs[Modality.TEXT],
                 labels=labels,
@@ -311,8 +324,8 @@ class UltraThinkCore(nn.Module):
         }
         
         # Add component-specific outputs
-        if use_dre and 'routing_info' in base_outputs:
-            outputs['routing_info'] = base_outputs['routing_info']
+        if 'routing_info' in locals() and routing_info is not None:
+            outputs['routing_info'] = routing_info
         
         if constitutional_info:
             outputs['constitutional_info'] = constitutional_info
@@ -349,6 +362,8 @@ class UltraThinkModel(nn.Module):
             'pad_token_id': 0,
             'eos_token_id': 2,
         }
+        # Storage for last generation's reasoning trace (for UI debugging)
+        self.last_reasoning = None
         
     def forward(self, *args, **kwargs):
         """Forward pass through the model"""
@@ -361,6 +376,7 @@ class UltraThinkModel(nn.Module):
         inputs: Optional[Dict[Modality, torch.Tensor]] = None,
         max_new_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        use_dre: Optional[bool] = None,
         reasoning_path: Optional[ReasoningPath] = None,
         enforce_safety: bool = True,
         **kwargs
@@ -399,11 +415,13 @@ class UltraThinkModel(nn.Module):
             raise ValueError("No input provided for generation")
         
         # Generation loop
+        reasoning_trace = []
         for _ in range(gen_config['max_new_tokens']):
             # Get model outputs
             outputs = self.core(
                 input_ids=generated if input_ids is not None else None,
                 inputs=inputs if inputs else None,
+                use_dre=use_dre,
                 reasoning_path=reasoning_path,
                 enforce_safety=enforce_safety,
                 use_cache=True,
@@ -411,6 +429,9 @@ class UltraThinkModel(nn.Module):
             )
             
             logits = outputs['logits']
+            # Collect routing info if available
+            if outputs is not None and isinstance(outputs, dict) and 'routing_info' in outputs:
+                reasoning_trace.append(outputs['routing_info'])
             
             # Get next token logits
             next_token_logits = logits[:, -1, :]
@@ -457,6 +478,8 @@ class UltraThinkModel(nn.Module):
             if (next_token == gen_config['eos_token_id']).all():
                 break
         
+        # Expose reasoning to callers (e.g., UI)
+        self.last_reasoning = reasoning_trace
         return generated
     
     def save_pretrained(self, save_path: str):
@@ -515,8 +538,31 @@ class UltraThinkModel(nn.Module):
         model = cls(config)
         
         # Load state dict
-        state_dict = torch.load(os.path.join(load_path, 'model.pt'), map_location='cpu')
-        model.core.load_state_dict(state_dict)
+        raw_state_dict = torch.load(os.path.join(load_path, 'model.pt'), map_location='cpu')
+
+        # Handle torch.compile wrapping which prefixes keys with '_orig_mod.'
+        cleaned_state_dict = {}
+        remapped = 0
+        for k, v in raw_state_dict.items():
+            new_k = k
+            if k.startswith('_orig_mod.'):
+                new_k = k[len('_orig_mod.') :]
+                remapped += 1
+            cleaned_state_dict[new_k] = v
+
+        # Filter keys to only those present in the target to avoid unexpected keys (e.g., base_model.lm_head)
+        target_keys = set(model.core.state_dict().keys())
+        filtered_state_dict = {k: v for k, v in cleaned_state_dict.items() if k in target_keys}
+        dropped = len(cleaned_state_dict) - len(filtered_state_dict)
+
+        missing_before = [k for k in target_keys if k not in filtered_state_dict]
+        if remapped or dropped or missing_before:
+            logger.info(
+                f"from_pretrained: remapped {remapped} keys, dropped {dropped} extraneous keys; "
+                f"will load with strict=False (missing={len(missing_before)})."
+            )
+
+        model.core.load_state_dict(filtered_state_dict, strict=False)
         
         logger.info(f"Model loaded from {load_path}")
         

@@ -114,6 +114,8 @@ class ComplexityScorer(nn.Module):
     def forward(self, features: ComplexityFeatures) -> torch.Tensor:
         """Compute complexity score from features"""
         # Create feature vector
+        dtype = next(self.parameters()).dtype
+        device = next(self.parameters()).device
         feature_vec = torch.tensor([
             features.token_length / 1000.0,  # Normalize
             features.token_entropy / 10.0,
@@ -124,31 +126,31 @@ class ComplexityScorer(nn.Module):
             features.conversation_depth / 10.0,
             features.prior_failures / 5.0,
             features.user_preference_score
-        ]).unsqueeze(0)
+        ], dtype=dtype, device=device).unsqueeze(0)
         
         # Pad to feature_dim
         if feature_vec.shape[1] < self.feature_mean.shape[0]:
-            padding = torch.zeros((1, self.feature_mean.shape[0] - feature_vec.shape[1]))
+            padding = torch.zeros((1, self.feature_mean.shape[0] - feature_vec.shape[1]), dtype=dtype, device=device)
             feature_vec = torch.cat([feature_vec, padding], dim=1)
         
         # Normalize features
-        feature_vec = (feature_vec - self.feature_mean) / (self.feature_std + 1e-8)
+        feature_vec = (feature_vec - self.feature_mean.to(dtype=dtype, device=device)) / (self.feature_std.to(dtype=dtype, device=device) + 1e-8)
         
         # Encode features
         text_features = self.text_encoder(feature_vec)
         
         # Add domain-specific features if present
         if features.has_math:
-            math_features = self.math_encoder(torch.randn(1, 32))  # Placeholder
+            math_features = self.math_encoder(torch.randn(1, 32, dtype=dtype, device=device))  # Placeholder
             text_features = torch.cat([text_features, math_features], dim=-1)
         
         if features.has_code:
-            code_features = self.code_encoder(torch.randn(1, 32))  # Placeholder
+            code_features = self.code_encoder(torch.randn(1, 32, dtype=dtype, device=device))  # Placeholder
             text_features = torch.cat([text_features, code_features], dim=-1)
         
         # Pad if necessary
         if text_features.shape[1] < 256:
-            padding = torch.zeros((1, 256 - text_features.shape[1]))
+            padding = torch.zeros((1, 256 - text_features.shape[1]), dtype=dtype, device=device)
             text_features = torch.cat([text_features, padding], dim=1)
         
         # Predict complexity
@@ -191,6 +193,8 @@ class RouterNetwork(nn.Module):
         pooled = hidden_states.mean(dim=1)  # [batch, hidden_dim]
         
         # Create feature vector
+        dtype = hidden_states.dtype
+        device = hidden_states.device
         feature_vec = torch.tensor([
             complexity_features.token_length / 1000.0,
             complexity_features.token_entropy / 10.0,
@@ -201,7 +205,7 @@ class RouterNetwork(nn.Module):
             complexity_features.conversation_depth / 10.0,
             complexity_features.prior_failures / 5.0,
             complexity_features.user_preference_score
-        ]).unsqueeze(0).repeat(batch_size, 1)
+        ], dtype=dtype, device=device).unsqueeze(0).repeat(batch_size, 1)
         
         # Concatenate features
         router_input = torch.cat([pooled, feature_vec], dim=-1)
@@ -427,12 +431,13 @@ class DynamicReasoningEngine(nn.Module):
         # Soft routing: combine outputs from multiple paths
         if use_soft_routing:
             # Return probabilities for weighted combination
+            probs_np = probs.detach().to(torch.float32).cpu().numpy()
             return RoutingDecision(
                 path=ReasoningPath.STANDARD,  # Default
                 confidence=confidence.item(),
                 complexity_score=complexity_score,
                 estimated_latency_ms=self._estimate_latency_weighted(probs),
-                debug_info={'probs': probs.cpu().numpy(), 'soft_routing': True}
+                debug_info={'probs': probs_np, 'soft_routing': True}
             )
         
         # Hard routing: select single path
@@ -449,13 +454,14 @@ class DynamicReasoningEngine(nn.Module):
         elif complexity_score >= self.complexity_thresholds[ReasoningPath.ULTRA_DEEP]:
             selected_path = ReasoningPath.ULTRA_DEEP
         
+        probs_np = probs.detach().to(torch.float32).cpu().numpy()
         return RoutingDecision(
             path=selected_path,
             confidence=confidence.item(),
             complexity_score=complexity_score,
             estimated_latency_ms=self._estimate_latency(selected_path),
             debug_info={
-                'probs': probs.cpu().numpy(),
+                'probs': probs_np,
                 'features': features.__dict__
             }
         )
@@ -480,7 +486,7 @@ class DynamicReasoningEngine(nn.Module):
     def _estimate_latency_weighted(self, probs: torch.Tensor) -> float:
         """Estimate weighted latency for soft routing"""
         latencies = [self._estimate_latency(path) for path in ReasoningPath]
-        weighted_latency = sum(p * l for p, l in zip(probs[0].cpu().numpy(), latencies))
+        weighted_latency = sum(p * l for p, l in zip(probs[0].detach().to(torch.float32).cpu().numpy(), latencies))
         return weighted_latency
     
     def forward(
