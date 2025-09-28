@@ -5,7 +5,6 @@
 ULTRATHINK is a practical, open-source training stack for advanced LLMs with stability-first defaults and modular components.
 
 - **Train small first**: verify learning on a tiny dataset, then scale safely.
-- **Stable by default**: SDPA/FlashAttention, AMP/DRE warmups, safe attention masks.
 - **Modular**: Dynamic Reasoning (DRE), Mixture-of-Experts (MoE), Multimodal, RLHF.
 
 ## Architecture (High-level)
@@ -29,22 +28,31 @@ flowchart TD
         J --> D
     end
 
+    subgraph Evaluation & RLHF
+        H --> K[Benchmarks]
+        H --> L[Reward Models / PPO]
+    end
+```
+
+## Architecture (Diagram)
+
+![ULTRATHINK Architecture](docs/images/architecture.png)
+
 ## Quick Links
-+- Docs index: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/README.md
-+- Getting started: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/getting_started.md
-+- Train small & monitor: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/training_small.md
-+- Datasets (switching, custom, mixing): https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/datasets.md
-+- Train in Google Colab: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/colab.md
-+- Full training (DDP/4D/RLHF): https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/training_full.md
-+- Development guide: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/development.md
-+- Evaluation: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/evaluation.md
-+- FAQ: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/faq.md
+- Docs index: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/README.md
+- Getting started: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/getting_started.md
+- Train small & monitor: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/training_small.md
+- Datasets (switching, custom, mixing): https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/datasets.md
+- Train in Google Colab: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/colab.md
+- Full training (DDP/4D/RLHF): https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/training_full.md
+- Development guide: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/development.md
+- Evaluation: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/evaluation.md
+- FAQ: https://github.com/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/faq.md
 
 ## Small real-data run (stable defaults)
 ```bash
 export TORCHDYNAMO_DISABLE=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
 python train_ultrathink.py \
   --dataset c4 --dataset_subset en --streaming \
   --enable_dre --dre_warmup_steps 500 \
