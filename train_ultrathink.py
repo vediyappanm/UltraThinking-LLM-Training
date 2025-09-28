@@ -108,6 +108,8 @@ class UltraThinkTrainer:
 
         # Initialize training components (optimizer, scheduler, AMP scaler, etc.)
         self.setup_training_components()
+        # Global step counter for warmups and scheduling
+        self.global_step = 0
     
     def setup_distributed(self):
         """Setup distributed training environment"""
@@ -424,14 +426,18 @@ class UltraThinkTrainer:
                 metrics = self.distributed_trainer.train_step(batch)
                 loss = metrics['loss']
             else:
+                # Decide whether to enable DRE this step (warmup off)
+                use_dre_now = True
+                if getattr(self.args, 'dre_warmup_steps', 0) and self.global_step < self.args.dre_warmup_steps:
+                    use_dre_now = False
                 if self.scaler:
                     # Use the new autocast API
                     device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
                     with torch.amp.autocast(device_type=device_type):
-                        outputs = self.model(**batch)
+                        outputs = self.model(use_dre=use_dre_now, **batch)
                         loss = outputs['loss']
                 else:
-                    outputs = self.model(**batch)
+                    outputs = self.model(use_dre=use_dre_now, **batch)
                     loss = outputs['loss']
 
                 # Scale loss for gradient accumulation
@@ -469,6 +475,8 @@ class UltraThinkTrainer:
 
                     self.scheduler.step()
                     self.optimizer.zero_grad()
+                    # Increment global optimizer step
+                    self.global_step += 1
             
             total_loss += loss.item()
             num_batches += 1
@@ -694,6 +702,7 @@ def parse_args():
     parser.add_argument('--enable_dre', action='store_true')
     parser.add_argument('--enable_constitutional', action='store_true')
     parser.add_argument('--enable_rlhf', action='store_true')
+    parser.add_argument('--dre_warmup_steps', type=int, default=0, help='Disable DRE for first N optimizer steps to stabilize training')
     
     # Training settings
     parser.add_argument('--batch_size', type=int, default=32)
