@@ -197,16 +197,30 @@ class GroupedQueryAttention(nn.Module):
                 causal=True
             ).transpose(1, 2)
         else:
-            # Standard attention
-            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-            
-            if attention_mask is not None:
-                # Ensure mask dtype matches weights to avoid NaNs in mixed precision
-                attn_weights = attn_weights + attention_mask.to(attn_weights.dtype)
-            
-            attn_weights = F.softmax(attn_weights, dim=-1)
-            attn_weights = self.attention_dropout(attn_weights)
-            attn_output = torch.matmul(attn_weights, value_states)
+            # Prefer PyTorch SDPA for stability and memory efficiency
+            try:
+                # SDPA expects (batch, heads, seq, dim)
+                # attn_mask supports additive masks of shape (batch, 1, seq, seq) or (batch, seq, seq)
+                sdpa_mask = None
+                if attention_mask is not None:
+                    # Convert to (batch, seq, seq) to broadcast across heads
+                    sdpa_mask = attention_mask.squeeze(1)
+                attn_output = F.scaled_dot_product_attention(
+                    query_states,
+                    key_states,
+                    value_states,
+                    attn_mask=sdpa_mask,
+                    dropout_p=self.attention_dropout.p if self.training else 0.0,
+                    is_causal=(sdpa_mask is None)  # causal if we didn't pass a combined mask
+                )
+            except Exception:
+                # Fallback to manual attention
+                attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+                if attention_mask is not None:
+                    attn_weights = attn_weights + attention_mask.to(attn_weights.dtype)
+                attn_weights = F.softmax(attn_weights, dim=-1)
+                attn_weights = self.attention_dropout(attn_weights)
+                attn_output = torch.matmul(attn_weights, value_states)
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
@@ -318,7 +332,7 @@ class AdvancedGPTModel(nn.Module):
         hidden_states = self.embed_tokens(input_ids)
         hidden_states = self.embed_dropout(hidden_states)
 
-        # Build final 4D additive attention mask combining causal and padding masks
+        # Build final 4D additive attention mask combining causal and key-side padding masks
         # Use finite large negatives for stability with fp16/bf16
         if hidden_states.dtype in (torch.float16, torch.bfloat16):
             mask_value = -1e4
@@ -336,11 +350,8 @@ class AdvancedGPTModel(nn.Module):
             # Key-side padding mask: (batch, 1, 1, seq)
             key_mask = (1 - attn1d) * mask_value
             key_mask = key_mask[:, None, None, :]
-            # Query-side padding mask: (batch, 1, seq, 1)
-            query_mask = (1 - attn1d) * mask_value
-            query_mask = query_mask[:, None, :, None]
-            # Combine
-            attention_mask = causal_mask + key_mask + query_mask
+            # Combine (do NOT apply query-side mask to avoid fully masked rows and NaNs)
+            attention_mask = causal_mask + key_mask
         else:
             attention_mask = causal_mask
 

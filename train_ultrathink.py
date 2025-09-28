@@ -433,7 +433,11 @@ class UltraThinkTrainer:
                 if self.scaler:
                     # Use the new autocast API
                     device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
-                    with torch.amp.autocast(device_type=device_type):
+                    # Optionally disable autocast during early warmup steps
+                    amp_enabled = True
+                    if getattr(self.args, 'amp_warmup_steps', 0) and self.global_step < self.args.amp_warmup_steps:
+                        amp_enabled = False
+                    with torch.amp.autocast(device_type=device_type, enabled=amp_enabled):
                         outputs = self.model(use_dre=use_dre_now, **batch)
                         loss = outputs['loss']
                 else:
