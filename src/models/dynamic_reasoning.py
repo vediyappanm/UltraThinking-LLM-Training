@@ -536,8 +536,16 @@ class DynamicReasoningEngine(nn.Module):
             'debug': routing_decision.debug_info
         }
         
-        logger.info(f"DRE: Path={routing_decision.path.value}, "
-                   f"Complexity={routing_decision.complexity_score:.3f}, "
-                   f"Latency={latency_ms:.1f}ms")
-        
+        # Avoid issues with torch.compile/torch._dynamo tracing Python f-strings and time
+        try:
+            is_compiling = getattr(torch._dynamo, 'is_compiling', lambda: False)()
+        except Exception:
+            is_compiling = False
+        if not is_compiling:
+            # Use logger parameter interpolation to avoid formatting issues
+            logger.info("DRE: Path=%s, Complexity=%.3f, Latency=%.1fms",
+                        routing_decision.path.value,
+                        float(routing_decision.complexity_score),
+                        float(latency_ms))
+
         return output
