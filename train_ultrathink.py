@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.cuda.amp import GradScaler, autocast
-import wandb
+import mlflow
 from tqdm import tqdm
 import logging
 from typing import Dict, List, Optional, Any
@@ -559,14 +559,16 @@ class UltraThinkTrainer:
                 'avg_loss': total_loss / num_batches
             })
             
-            # Log to wandb
-            if self.args.use_wandb and self.is_main_process() and batch_idx % 100 == 0:
-                wandb.log({
-                    'train/loss': loss.item(),
-                    'train/learning_rate': self.scheduler.get_last_lr()[0],
-                    'train/epoch': epoch,
-                    'train/step': epoch * len(self.train_loader) + batch_idx
-                })
+            # Log to MLflow
+            if getattr(self.args, 'use_mlflow', False) and self.is_main_process() and batch_idx % 100 == 0:
+                try:
+                    mlflow.log_metrics({
+                        'train/loss': float(loss.item()),
+                        'train/learning_rate': float(self.scheduler.get_last_lr()[0]) if self.scheduler is not None else 0.0,
+                        'train/epoch': float(epoch),
+                    }, step=epoch * len(self.train_loader) + batch_idx)
+                except Exception as _e:
+                    logger.debug(f"MLflow logging skipped: {_e}")
         
         return total_loss / num_batches
     
@@ -589,8 +591,11 @@ class UltraThinkTrainer:
         
         avg_loss = total_loss / num_batches
         
-        if self.args.use_wandb and self.is_main_process():
-            wandb.log({'val/loss': avg_loss})
+        if getattr(self.args, 'use_mlflow', False) and self.is_main_process():
+            try:
+                mlflow.log_metric('val/loss', float(avg_loss))
+            except Exception as _e:
+                logger.debug(f"MLflow logging skipped: {_e}")
         
         return avg_loss
     
@@ -659,8 +664,18 @@ class UltraThinkTrainer:
         # Log results
         logger.info(results['summary'])
         
-        if self.args.use_wandb and self.is_main_process():
-            wandb.log({'eval/results': results['aggregate_scores']})
+        if getattr(self.args, 'use_mlflow', False) and self.is_main_process():
+            try:
+                # Log aggregate scores as individual metrics if numeric
+                for k, v in results.get('aggregate_scores', {}).items():
+                    if isinstance(v, (int, float)):
+                        mlflow.log_metric(f"eval/{k}", float(v))
+                # Also store full results as an artifact
+                out_path = os.path.join(self.args.output_dir, 'evaluation_results.json')
+                if os.path.exists(out_path):
+                    mlflow.log_artifact(out_path, artifact_path='evaluation')
+            except Exception as _e:
+                logger.debug(f"MLflow logging skipped: {_e}")
         
         # Save results
         if self.is_main_process():
@@ -695,6 +710,13 @@ class UltraThinkTrainer:
         # Save model in HuggingFace format
         if epoch == self.args.num_epochs - 1:
             self.model.save_pretrained(os.path.join(self.args.output_dir, 'final_model'))
+        
+        # Log checkpoint as MLflow artifact
+        if getattr(self.args, 'use_mlflow', False) and self.is_main_process():
+            try:
+                mlflow.log_artifact(checkpoint_path, artifact_path='checkpoints')
+            except Exception as _e:
+                logger.debug(f"MLflow artifact logging skipped: {_e}")
     
     def train(self):
         """Main training loop"""
@@ -856,6 +878,10 @@ def parse_args():
 
     # Logging
     parser.add_argument('--use_wandb', action='store_true')
+    # MLflow logging flags (preferred)
+    parser.add_argument('--use_mlflow', action='store_true', help='Enable MLflow experiment tracking')
+    parser.add_argument('--mlflow_tracking_uri', type=str, default='file:./mlruns', help='MLflow tracking URI (default: local ./mlruns)')
+    parser.add_argument('--mlflow_experiment', type=str, default='UltraThinking-LLM-Training', help='MLflow experiment name')
     parser.add_argument('--run_name', type=str, default='ultrathink_training')
 
     # Output
@@ -896,12 +922,40 @@ def main():
     # Create trainer
     trainer = UltraThinkTrainer(args)
     
+    # Optionally start MLflow run
+    active_mlflow = False
+    if getattr(args, 'use_mlflow', False) and trainer.is_main_process():
+        try:
+            mlflow.set_tracking_uri(args.mlflow_tracking_uri)
+            mlflow.set_experiment(args.mlflow_experiment)
+            mlflow.start_run(run_name=args.run_name)
+            # Log all CLI args as params (cast to str for complex types)
+            safe_params = {k: (str(v) if not isinstance(v, (str, int, float, bool)) else v) for k, v in vars(args).items()}
+            mlflow.log_params(safe_params)
+            active_mlflow = True
+        except Exception as _e:
+            logger.warning(f"Failed to start MLflow run: {_e}")
+            active_mlflow = False
+    
     # Run training
     results = trainer.train()
     
     # Log final results
     logger.info("Training completed!")
     logger.info(f"Final results: {results}")
+    
+    # Finalize MLflow run
+    if getattr(args, 'use_mlflow', False) and trainer.is_main_process() and active_mlflow:
+        try:
+            # Store final results JSON as artifact if present
+            results_path = os.path.join(args.output_dir, 'evaluation_results.json')
+            if os.path.exists(results_path):
+                mlflow.log_artifact(results_path, artifact_path='evaluation')
+        finally:
+            try:
+                mlflow.end_run()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

@@ -154,39 +154,42 @@ class TrainingMetrics:
         if self.param_norm:
             writer.add_scalar('Parameters/norm', self.param_norm[-1], step)
     
-    def export_wandb(self, step: Optional[int] = None):
-        """Export to Weights & Biases"""
+    def export_mlflow(self, step: Optional[int] = None):
+        """Export metrics to MLflow"""
         try:
-            import wandb
+            import mlflow
         except ImportError:
-            logger.warning("wandb not installed, skipping export")
+            logger.warning("mlflow not installed, skipping export")
             return
-        
+
         if step is None:
             step = self.global_step
-        
+
         metrics_dict = {}
-        
+
         if self.train_loss:
-            metrics_dict['train/loss'] = self.train_loss[-1]
-        
+            metrics_dict['train/loss'] = float(self.train_loss[-1])
+
         if self.val_loss:
-            metrics_dict['val/loss'] = self.val_loss[-1]
-        
+            metrics_dict['val/loss'] = float(self.val_loss[-1])
+
         if self.lr_history:
-            metrics_dict['train/learning_rate'] = self.lr_history[-1]
-        
+            metrics_dict['train/learning_rate'] = float(self.lr_history[-1])
+
         if self.tokens_per_second:
-            metrics_dict['perf/tokens_per_second'] = self.tokens_per_second[-1]
-        
+            metrics_dict['perf/tokens_per_second'] = float(self.tokens_per_second[-1])
+
         if self.gpu_memory_allocated:
-            metrics_dict['gpu/memory_gb'] = self.gpu_memory_allocated[-1]
-        
+            metrics_dict['gpu/memory_gb'] = float(self.gpu_memory_allocated[-1])
+
         if self.grad_norm:
-            metrics_dict['train/grad_norm'] = self.grad_norm[-1]
-        
+            metrics_dict['train/grad_norm'] = float(self.grad_norm[-1])
+
         if metrics_dict:
-            wandb.log(metrics_dict, step=step)
+            try:
+                mlflow.log_metrics(metrics_dict, step=int(step))
+            except Exception as _e:
+                logger.debug(f"MLflow export skipped: {_e}")
 
 
 class MetricsLogger:
