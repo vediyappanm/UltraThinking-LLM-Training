@@ -29,6 +29,11 @@ class DatasetConfig:
     streaming: bool = False
     cache_dir: Optional[str] = None
     num_proc: int = 4
+    # Streaming controls
+    seed: int = 42
+    buffer_size: int = 10000
+    shard_rank: Optional[int] = None
+    shard_num_shards: Optional[int] = None
     
     # Local dataset options
     local_path: Optional[str] = None
@@ -264,7 +269,16 @@ class TextDataset(Dataset):
                 logger.info(f"Loaded {len(data)} samples from {self.config.name}")
                 return data
             else:
-                # For streaming datasets, we'll handle differently
+                # For streaming datasets, shard and shuffle as requested
+                if self.config.shard_num_shards is not None and self.config.shard_rank is not None:
+                    try:
+                        dataset = dataset.shard(self.config.shard_num_shards, self.config.shard_rank)
+                    except Exception as e:
+                        logger.warning(f"Streaming shard not applied: {e}")
+                try:
+                    dataset = dataset.shuffle(seed=self.config.seed, buffer_size=self.config.buffer_size)
+                except Exception as e:
+                    logger.warning(f"Streaming shuffle not applied: {e}")
                 return dataset
                 
         except Exception as e:
@@ -284,7 +298,12 @@ class TextDataset(Dataset):
             item = self.data[idx % len(self.data)]
         else:
             # For streaming datasets
-            item = next(iter(self.data.skip(idx).take(1)))
+            stream = self.data
+            try:
+                stream = stream.shuffle(seed=self.config.seed, buffer_size=self.config.buffer_size)
+            except Exception:
+                pass
+            item = next(iter(stream.skip(idx).take(1)))
         
         text = item[self.config.text_column]
         

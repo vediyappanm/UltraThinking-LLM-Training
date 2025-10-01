@@ -62,6 +62,21 @@ except ImportError as e:
     logger.info("Make sure all dependencies are installed: pip install -r requirements.txt")
     sys.exit(1)
 
+# Modular training utilities
+try:
+    from src.training.optim import build_optimizer
+    from src.training.scheduler import build_scheduler
+    from src.training.checkpoint import save_checkpoint, load_checkpoint
+    from src.training.loop import train_one_epoch, validate_epoch
+except Exception as _e:
+    logger.warning(f"Modular training utilities import issue: {_e}")
+
+# Optional DeepSpeed
+try:
+    import deepspeed  # type: ignore
+except Exception:
+    deepspeed = None
+
 
 class UltraThinkTrainer:
     """Main trainer for ULTRATHINK model"""
@@ -110,16 +125,48 @@ class UltraThinkTrainer:
         self.setup_training_components()
         # Global step counter for warmups and scheduling
         self.global_step = 0
+
+        # If resuming from checkpoint
+        if getattr(self.args, 'resume_checkpoint', None):
+            try:
+                resumed_epoch = load_checkpoint(self.args.resume_checkpoint, self.train_model, getattr(self, 'optimizer', None), getattr(self, 'scheduler', None))
+                if resumed_epoch is not None:
+                    self.start_epoch = int(resumed_epoch) + 1
+                    logger.info(f"Resumed from checkpoint at epoch {resumed_epoch}")
+            except Exception as e:
+                logger.warning(f"Failed to resume from checkpoint {self.args.resume_checkpoint}: {e}")
     
     def setup_distributed(self):
         """Setup distributed training environment"""
-        if self.args.distributed:
-            dist.init_process_group(backend='nccl')
+        self.use_deepspeed = bool(getattr(self.args, 'deepspeed', None))
+        launched_by_accelerate = (getattr(self.args, 'launcher', 'none') == 'accelerate')
+
+        # Check environment provided by launchers (accelerate/torchrun)
+        env_rank = os.environ.get('RANK')
+        env_world = os.environ.get('WORLD_SIZE')
+        env_local_rank = os.environ.get('LOCAL_RANK')
+        multi_proc_env = (env_rank is not None) or (env_world not in (None, '1'))
+
+        if self.use_deepspeed and deepspeed is not None:
+            # Initialize distributed via DeepSpeed if requested
+            deepspeed.init_distributed()
+            self.world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+            self.rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+            self.local_rank = int(env_local_rank or 0)
+            if torch.cuda.is_available():
+                torch.cuda.set_device(self.local_rank)
+        elif (self.args.distributed or launched_by_accelerate) and (multi_proc_env):
+            backend = 'nccl' if torch.cuda.is_available() else 'gloo'
+            dist.init_process_group(backend=backend)
             self.world_size = dist.get_world_size()
             self.rank = dist.get_rank()
-            self.local_rank = int(os.environ.get('LOCAL_RANK', 0))
-            torch.cuda.set_device(self.local_rank)
+            self.local_rank = int(env_local_rank or 0)
+            if torch.cuda.is_available():
+                torch.cuda.set_device(self.local_rank)
         else:
+            # Single-process fallback
+            if self.args.distributed and not multi_proc_env:
+                logger.warning("--distributed requested but single process detected; proceeding without initializing process group. Use accelerate/torchrun for multi-process.")
             self.world_size = 1
             self.rank = 0
             self.local_rank = 0
@@ -219,21 +266,35 @@ class UltraThinkTrainer:
     
     def setup_training_components(self):
         """Setup training components"""
-        # Optimizer
-        if not self.args.use_4d_parallelism:
-            self.optimizer = torch.optim.AdamW(
-                self.model.parameters(),
-                lr=self.args.learning_rate,
-                weight_decay=self.args.weight_decay,
-                betas=(self.args.adam_beta1, self.args.adam_beta2)
+        # DeepSpeed path
+        if self.use_deepspeed and deepspeed is not None and self.args.deepspeed:
+            try:
+                with open(self.args.deepspeed, 'r') as f:
+                    ds_cfg = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to read DeepSpeed config {self.args.deepspeed}: {e}")
+                ds_cfg = {}
+            self.optimizer = None
+            self.scheduler = None
+            engine, opt, _, sch = deepspeed.initialize(
+                model=self.model,
+                model_parameters=self.model.parameters(),
+                config_params=ds_cfg,
             )
+            self.train_model = engine
+            # Optional: capture optimizer and scheduler from DS
+            self.optimizer = opt
+            self.scheduler = sch
+            self.scaler = None  # DeepSpeed handles precision
+            return
+
+        # Non-DeepSpeed path
+        if not self.args.use_4d_parallelism:
+            self.optimizer = build_optimizer(self.model, self.args)
         
-        # Learning rate scheduler
-        from transformers import get_linear_schedule_with_warmup
-        self.scheduler = get_linear_schedule_with_warmup(
+        self.scheduler = build_scheduler(
             self.optimizer if not self.args.use_4d_parallelism else self.distributed_trainer.optimizer,
-            num_warmup_steps=self.args.warmup_steps,
-            num_training_steps=self.args.max_steps
+            self.args,
         )
         
         # Mixed precision (fix deprecation warning)
@@ -242,10 +303,12 @@ class UltraThinkTrainer:
                 from torch.amp import GradScaler as NewGradScaler
                 self.scaler = NewGradScaler('cuda' if torch.cuda.is_available() else 'cpu')
             except ImportError:
-                # Fallback for older PyTorch versions
                 self.scaler = GradScaler()
         else:
             self.scaler = None
+
+        # Model used by outer loop (DeepSpeed engine or plain model)
+        self.train_model = self.model
         
         # RLHF system
         if self.args.enable_rlhf:
@@ -358,6 +421,10 @@ class UltraThinkTrainer:
                 config.max_length = self.args.max_seq_length
                 config.tokenizer_name = self.args.tokenizer_name
                 
+                # For streaming datasets in distributed, set sharding hints
+                if getattr(config, 'streaming', False) and self.world_size > 1:
+                    config.shard_rank = self.rank
+                    config.shard_num_shards = self.world_size
                 try:
                     train_dataset = create_dataset(config, "train")
                     val_dataset = create_dataset(config, "validation")
@@ -375,15 +442,16 @@ class UltraThinkTrainer:
                 val_dataset = DummyDataset(self.args.val_samples)
         
         # Create data loaders
-        train_sampler = DistributedSampler(train_dataset) if self.args.distributed else None
-        val_sampler = DistributedSampler(val_dataset) if self.args.distributed else None
+        is_dist = getattr(self, 'world_size', 1) and self.world_size > 1
+        train_sampler = DistributedSampler(train_dataset) if is_dist else None
+        val_sampler = DistributedSampler(val_dataset) if is_dist else None
         
         self.train_loader = DataLoader(
             train_dataset,
             batch_size=self.args.batch_size,
             sampler=train_sampler,
             shuffle=(train_sampler is None),
-            num_workers=0,  # Set to 0 for Windows compatibility
+            num_workers=0,  # Windows compatibility; tune on Linux
             pin_memory=False  # Disable pin_memory on CPU
         )
         
@@ -392,8 +460,8 @@ class UltraThinkTrainer:
             batch_size=self.args.batch_size,
             sampler=val_sampler,
             shuffle=False,
-            num_workers=0,  # Set to 0 for Windows compatibility
-            pin_memory=False  # Disable pin_memory on CPU
+            num_workers=0,
+            pin_memory=False
         )
         
         # Generate synthetic data if requested
@@ -640,13 +708,30 @@ class UltraThinkTrainer:
         def run_one_epoch(epoch: int):
             nonlocal best_val_loss
             logger.info(f"Epoch {epoch + 1}")
-            train_loss = self.train_epoch(epoch)
+            train_loss, self.global_step = train_one_epoch(
+                model=self.train_model,
+                train_loader=self.train_loader,
+                optimizer=getattr(self, 'optimizer', None),
+                scheduler=getattr(self, 'scheduler', None),
+                scaler=self.scaler,
+                device=self.device,
+                args=self.args,
+                global_step=self.global_step,
+                use_wandb=self.args.use_wandb,
+                is_main_process=self.is_main_process(),
+            )
             logger.info(f"Training loss: {train_loss:.4f}")
-            val_loss = self.validate()
+            val_loss = validate_epoch(
+                model=self.train_model,
+                val_loader=self.val_loader,
+                device=self.device,
+                is_main_process=self.is_main_process(),
+            )
             logger.info(f"Validation loss: {val_loss:.4f}")
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                self.save_checkpoint(epoch, val_loss)
+                # Save checkpoint via utility
+                save_checkpoint(self.args.output_dir, epoch, self.train_model, getattr(self, 'optimizer', None), getattr(self, 'scheduler', None), val_loss, self.config)
             if (epoch + 1) % self.args.rlhf_frequency == 0:
                 self.run_rlhf_training()
             if (epoch + 1) % self.args.eval_frequency == 0:
@@ -737,6 +822,9 @@ def parse_args():
     parser.add_argument('--pipeline_parallel_size', type=int, default=1)
     parser.add_argument('--expert_parallel_size', type=int, default=1)
     parser.add_argument('--zero_stage', type=int, default=0)
+    # DeepSpeed / Launchers
+    parser.add_argument('--deepspeed', type=str, default=None, help='Path to DeepSpeed JSON config to enable DeepSpeed engine')
+    parser.add_argument('--launcher', type=str, default='none', choices=['none','deepspeed','accelerate','torchrun'], help='Launcher used to start distributed run')
     
     # RLHF settings
     parser.add_argument('--rlhf_frequency', type=int, default=5)

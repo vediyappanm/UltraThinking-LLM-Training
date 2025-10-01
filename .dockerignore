@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+.env
+
+# Node/Web
+node_modules/
+
+# OS / Misc
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Outputs, logs, checkpoints
+outputs/
+checkpoints/
+wandb/
+logs/
+.cache/
+.huggingface/
+
+# Notebooks
+.ipynb_checkpoints/

@@ -32,6 +32,8 @@ pylint>=2.17.0
 flake8>=7.3.0
 mypy>=1.5.0
 pre-commit>=3.4.0
+bandit>=1.7.5
+python-dotenv>=1.0.0
 
 # Experiment Tracking
 wandb>=0.15.0
@@ -47,6 +49,8 @@ pyyaml>=6.0
 # Testing
 pytest>=7.4.0
 pytest-cov>=4.1.0
+pytest-timeout>=2.1.0
+pytest-xdist>=3.3.0
 
 # Optimization / Hyperparameter Tuning
 optuna>=3.3.0

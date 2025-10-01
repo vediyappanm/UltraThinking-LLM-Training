@@ -1,0 +1,25 @@
+version: "3.9"
+services:
+  ultrathink-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ultrathink:latest
+    container_name: ultrathink_app
+    ports:
+      - "7860:7860"
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TORCHDYNAMO_DISABLE=1
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - .:/app
+    command: ["python", "app_gradio.py"]
+    # For GPU, uncomment the following and run with: docker compose --profile gpu up
+    # profiles: ["gpu"]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - capabilities: ["gpu"]
