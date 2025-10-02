@@ -92,7 +92,7 @@ DATASET_CONFIGS = {
         streaming=True
     ),
     "c4": DatasetConfig(
-        name="c4",
+        name="allenai/c4",
         subset="en",
         text_column="text",
         max_length=512,
@@ -231,6 +231,8 @@ class TextDataset(Dataset):
             legacy_map = {
                 "openwebtext": "Skylion007/openwebtext",
                 "bookcorpus": "bookcorpusopen",
+                # Ensure C4 resolves to HF hub (avoid local c4.py script)
+                "c4": "allenai/c4",
             }
             if target_name in legacy_map:
                 target_name = legacy_map[target_name]

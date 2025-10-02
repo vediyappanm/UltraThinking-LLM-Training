@@ -3,9 +3,17 @@ Advanced Mixture of Experts (MoE³) Architecture
 Implements hierarchical, consultative experts with domain specialization
 """
 
+import math
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+# Safe import for torch.compile disable
+try:
+    from torch._dynamo import disable as torchdynamo_disable
+except Exception:  # pragma: no cover
+    def torchdynamo_disable(fn):
+        return fn
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 from enum import Enum
@@ -58,12 +66,13 @@ class NoisyTopKRouter(nn.Module):
         self.top_k = top_k
         self.noise_std = noise_std
         
-        # Router network
-        self.gate = nn.Linear(hidden_dim, num_experts, bias=False)
+        # Router network - use float32 for stability
+        self.gate = nn.Linear(hidden_dim, num_experts, bias=False, dtype=torch.float32)
         
         # Learnable noise parameters
-        self.noise_linear = nn.Linear(hidden_dim, num_experts)
+        self.noise_linear = nn.Linear(hidden_dim, num_experts, dtype=torch.float32)
         
+    @torchdynamo_disable
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -75,26 +84,32 @@ class NoisyTopKRouter(nn.Module):
         """
         batch_size, seq_len, hidden_dim = hidden_states.shape
         hidden_states_flat = hidden_states.view(-1, hidden_dim)  # [B*S, H]
-        
-        # Store original dtype for consistency
+
+        # Preserve original dtype of activations; router math in fp32
         original_dtype = hidden_states.dtype
-        
-        # Compute router logits - ensure dtype consistency
-        logits = self.gate(hidden_states_flat)  # [B*S, E]
-        
-        # Add noise during training for exploration
-        if training and self.noise_std > 0:
-            noise_logits = self.noise_linear(hidden_states_flat)
-            noise = torch.randn_like(logits) * F.softplus(noise_logits)
-            logits = logits + noise * self.noise_std
-        
-        # Compute top-k experts - cast to float32 for numerical stability
-        scores = F.softmax(logits.float(), dim=-1)
-        top_k_scores, top_k_indices = torch.topk(scores, self.top_k, dim=-1)
-        
-        # Renormalize top-k scores and cast back to original dtype
-        top_k_scores = top_k_scores / top_k_scores.sum(dim=-1, keepdim=True)
-        top_k_scores = top_k_scores.to(original_dtype)
+
+        # Disable AMP autocast inside router to avoid Float/Half addmm mismatches
+        device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
+        with torch.amp.autocast(device_type=device_type, enabled=False):
+            # Cast activations to fp32 for stable routing
+            hs_fp32 = hidden_states_flat.to(dtype=torch.float32)
+
+            # Router logits in fp32
+            logits = self.gate(hs_fp32)  # [B*S, E], fp32 weights by construction
+
+            # Add noise during training for exploration (fp32)
+            if training and self.noise_std > 0:
+                noise_logits = self.noise_linear(hs_fp32)
+                noise = torch.randn_like(logits) * F.softplus(noise_logits)
+                logits = logits + noise * self.noise_std
+
+            # Softmax/topk in fp32
+            scores = F.softmax(logits, dim=-1)
+            top_k_scores, top_k_indices = torch.topk(scores, self.top_k, dim=-1)
+
+            # Renormalize and cast back to original dtype for downstream use
+            top_k_scores = top_k_scores / top_k_scores.sum(dim=-1, keepdim=True)
+            top_k_scores = top_k_scores.to(original_dtype)
         
         # Create dispatch mask [B*S, E, K]
         dispatch_mask = torch.zeros(

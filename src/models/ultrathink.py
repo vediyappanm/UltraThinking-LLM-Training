@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import logging
 import sys
+import os
 
 # Import all components
 from .architecture import AdvancedGPTModel, ModelConfig
@@ -68,7 +69,8 @@ class UltraThinkConfig:
     # Memory and optimization
     gradient_checkpointing: bool = True
     mixed_precision: str = "bf16"
-    compile_model: bool = True
+    # Make compilation opt-in to avoid AMP/MoE dtype issues on some platforms
+    compile_model: bool = False
     
     # Inference settings
     max_new_tokens: int = 4096
@@ -347,8 +349,13 @@ class UltraThinkModel(nn.Module):
         # Core model
         self.core = UltraThinkCore(config)
         
-        # Compile model for better performance if requested (disabled on Windows due to compiler issues)
-        if config.compile_model and not sys.platform.startswith('win'):
+        # Compile model for better performance if requested (disabled on Windows and when TORCHDYNAMO_DISABLE=1)
+        can_compile = (
+            config.compile_model
+            and not sys.platform.startswith('win')
+            and os.environ.get('TORCHDYNAMO_DISABLE', '') != '1'
+        )
+        if can_compile:
             self.core = torch.compile(self.core)
         
         # Generation config
