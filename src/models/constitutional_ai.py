@@ -126,13 +126,18 @@ class HarmPredictor(nn.Module):
             harm_scores[HarmCategory.PII] = max(harm_scores[HarmCategory.PII], pii_score)
         
         # Aggregate scores for overall safety
+        # Ensure all tensors are on the same device as encoded
+        device = encoded.device
         score_tensor = torch.stack([
-            harm_scores[cat] if isinstance(harm_scores[cat], torch.Tensor) else torch.tensor(harm_scores[cat])
+            harm_scores[cat] if isinstance(harm_scores[cat], torch.Tensor) else torch.tensor(harm_scores[cat], device=device)
             for cat in HarmCategory
         ])
         
         if len(score_tensor.shape) == 1:
             score_tensor = score_tensor.unsqueeze(0)
+        
+        # Ensure score_tensor is on the correct device
+        score_tensor = score_tensor.to(device)
         
         safety_input = torch.cat([encoded, score_tensor], dim=-1)
         overall_safety = self.safety_head(safety_input).squeeze(-1)
