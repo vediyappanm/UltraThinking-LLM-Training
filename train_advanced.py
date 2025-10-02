@@ -39,68 +39,82 @@ def config_to_args(config: Dict) -> argparse.Namespace:
     """Convert config dict to argparse Namespace for compatibility"""
     args = argparse.Namespace()
     
+    # Helper to ensure numeric types
+    def to_int(val, default):
+        return int(val) if val is not None else default
+    
+    def to_float(val, default):
+        return float(val) if val is not None else default
+    
+    def to_bool(val, default):
+        if val is None:
+            return default
+        if isinstance(val, bool):
+            return val
+        return str(val).lower() in ('true', '1', 'yes')
+    
     # Model config
     model = config.get('model', {})
-    args.vocab_size = model.get('vocab_size', 100352)
-    args.hidden_size = model.get('hidden_size', 4096)
-    args.num_layers = model.get('num_layers', 32)
-    args.num_heads = model.get('num_heads', 32)
-    args.num_kv_heads = model.get('num_kv_heads', 8)
-    args.intermediate_size = model.get('intermediate_size', 14336)
-    args.max_seq_length = model.get('max_seq_length', 8192)
+    args.vocab_size = to_int(model.get('vocab_size'), 100352)
+    args.hidden_size = to_int(model.get('hidden_size'), 4096)
+    args.num_layers = to_int(model.get('num_layers'), 32)
+    args.num_heads = to_int(model.get('num_heads'), 32)
+    args.num_kv_heads = to_int(model.get('num_kv_heads'), 8)
+    args.intermediate_size = to_int(model.get('intermediate_size'), 14336)
+    args.max_seq_length = to_int(model.get('max_seq_length'), 8192)
     args.activation = model.get('activation', 'swiglu')
-    args.dropout = model.get('dropout', 0.0)
-    args.attention_dropout = model.get('attention_dropout', 0.0)
-    args.use_flash_attention = model.get('use_flash_attention', False)
-    args.gradient_checkpointing = model.get('gradient_checkpointing', False)
+    args.dropout = to_float(model.get('dropout'), 0.0)
+    args.attention_dropout = to_float(model.get('attention_dropout'), 0.0)
+    args.use_flash_attention = to_bool(model.get('use_flash_attention'), False)
+    args.gradient_checkpointing = to_bool(model.get('gradient_checkpointing'), False)
     
     # Advanced features
     advanced = config.get('advanced', {})
-    args.enable_moe = advanced.get('enable_moe', False)
-    args.enable_dre = advanced.get('enable_dre', False)
-    args.enable_constitutional = advanced.get('enable_constitutional', False)
-    args.enable_rlhf = advanced.get('enable_rlhf', False)
-    args.enable_multimodal = advanced.get('enable_multimodal', False)
-    args.dre_warmup_steps = advanced.get('dre_warmup_steps', 0)
+    args.enable_moe = to_bool(advanced.get('enable_moe'), False)
+    args.enable_dre = to_bool(advanced.get('enable_dre'), False)
+    args.enable_constitutional = to_bool(advanced.get('enable_constitutional'), False)
+    args.enable_rlhf = to_bool(advanced.get('enable_rlhf'), False)
+    args.enable_multimodal = to_bool(advanced.get('enable_multimodal'), False)
+    args.dre_warmup_steps = to_int(advanced.get('dre_warmup_steps'), 0)
     
     # MoE config
     moe = config.get('moe', {})
-    args.num_knowledge_experts = moe.get('num_knowledge_experts', 64)
-    args.num_skill_experts = moe.get('num_skill_experts', 32)
-    args.num_meta_experts = moe.get('num_meta_experts', 16)
-    args.num_safety_experts = moe.get('num_safety_experts', 8)
-    args.moe_top_k = moe.get('moe_top_k', 2)
-    args.expert_capacity = moe.get('expert_capacity', 1.25)
+    args.num_knowledge_experts = to_int(moe.get('num_knowledge_experts'), 64)
+    args.num_skill_experts = to_int(moe.get('num_skill_experts'), 32)
+    args.num_meta_experts = to_int(moe.get('num_meta_experts'), 16)
+    args.num_safety_experts = to_int(moe.get('num_safety_experts'), 8)
+    args.moe_top_k = to_int(moe.get('moe_top_k'), 2)
+    args.expert_capacity = to_float(moe.get('expert_capacity'), 1.25)
     
     # Multimodal config
     multimodal = config.get('multimodal', {})
-    args.image_size = multimodal.get('image_size', 224)
-    args.patch_size = multimodal.get('patch_size', 14)
-    args.audio_sample_rate = multimodal.get('audio_sample_rate', 16000)
+    args.image_size = to_int(multimodal.get('image_size'), 224)
+    args.patch_size = to_int(multimodal.get('patch_size'), 14)
+    args.audio_sample_rate = to_int(multimodal.get('audio_sample_rate'), 16000)
     
     # Training config
     training = config.get('training', {})
-    args.batch_size = training.get('batch_size', 32)
-    args.gradient_accumulation_steps = training.get('gradient_accumulation_steps', 4)
-    args.learning_rate = training.get('learning_rate', 3e-5)
-    args.weight_decay = training.get('weight_decay', 0.01)
-    args.adam_beta1 = training.get('adam_beta1', 0.9)
-    args.adam_beta2 = training.get('adam_beta2', 0.999)
-    args.warmup_steps = training.get('warmup_steps', 10000)
-    args.max_steps = training.get('max_steps', 1000000)
-    args.num_epochs = training.get('num_epochs', 3)
-    args.gradient_clipping = training.get('gradient_clipping', 1.0)
-    args.use_amp = training.get('use_amp', False)
+    args.batch_size = to_int(training.get('batch_size'), 32)
+    args.gradient_accumulation_steps = to_int(training.get('gradient_accumulation_steps'), 4)
+    args.learning_rate = to_float(training.get('learning_rate'), 3e-5)
+    args.weight_decay = to_float(training.get('weight_decay'), 0.01)
+    args.adam_beta1 = to_float(training.get('adam_beta1'), 0.9)
+    args.adam_beta2 = to_float(training.get('adam_beta2'), 0.999)
+    args.warmup_steps = to_int(training.get('warmup_steps'), 10000)
+    args.max_steps = to_int(training.get('max_steps'), 1000000)
+    args.num_epochs = to_int(training.get('num_epochs'), 3)
+    args.gradient_clipping = to_float(training.get('gradient_clipping'), 1.0)
+    args.use_amp = to_bool(training.get('use_amp'), False)
     
     # Distributed config
     distributed = config.get('distributed', {})
-    args.distributed = distributed.get('enabled', False)
-    args.use_4d_parallelism = distributed.get('use_4d_parallelism', False)
-    args.data_parallel_size = distributed.get('data_parallel_size', 1)
-    args.tensor_parallel_size = distributed.get('tensor_parallel_size', 1)
-    args.pipeline_parallel_size = distributed.get('pipeline_parallel_size', 1)
-    args.expert_parallel_size = distributed.get('expert_parallel_size', 1)
-    args.zero_stage = distributed.get('zero_stage', 0)
+    args.distributed = to_bool(distributed.get('enabled'), False)
+    args.use_4d_parallelism = to_bool(distributed.get('use_4d_parallelism'), False)
+    args.data_parallel_size = to_int(distributed.get('data_parallel_size'), 1)
+    args.tensor_parallel_size = to_int(distributed.get('tensor_parallel_size'), 1)
+    args.pipeline_parallel_size = to_int(distributed.get('pipeline_parallel_size'), 1)
+    args.expert_parallel_size = to_int(distributed.get('expert_parallel_size'), 1)
+    args.zero_stage = to_int(distributed.get('zero_stage'), 0)
     args.deepspeed = distributed.get('deepspeed_config', None)
     args.launcher = distributed.get('launcher', 'none')
     
@@ -112,29 +126,29 @@ def config_to_args(config: Dict) -> argparse.Namespace:
     args.data_path = data.get('data_path', None)
     args.text_column = data.get('text_column', 'text')
     args.tokenizer_name = data.get('tokenizer_name', 'gpt2')
-    args.max_samples = data.get('max_samples', None)
-    args.train_samples = data.get('train_samples', 10000)
-    args.val_samples = data.get('val_samples', 1000)
-    args.num_workers = data.get('num_workers', 4)
-    args.streaming = data.get('streaming', False)
-    args.use_synthetic_data = data.get('use_synthetic_data', False)
-    args.synthetic_samples = data.get('synthetic_samples', 5000)
+    args.max_samples = to_int(data.get('max_samples'), None) if data.get('max_samples') is not None else None
+    args.train_samples = to_int(data.get('train_samples'), 10000)
+    args.val_samples = to_int(data.get('val_samples'), 1000)
+    args.num_workers = to_int(data.get('num_workers'), 4)
+    args.streaming = to_bool(data.get('streaming'), False)
+    args.use_synthetic_data = to_bool(data.get('use_synthetic_data'), False)
+    args.synthetic_samples = to_int(data.get('synthetic_samples'), 5000)
     
     # RLHF config
     rlhf = config.get('rlhf', {})
-    args.rlhf_frequency = rlhf.get('rlhf_frequency', 5)
-    args.rlhf_iterations = rlhf.get('rlhf_iterations', 100)
-    args.rlhf_steps_per_iteration = rlhf.get('rlhf_steps_per_iteration', 1000)
-    args.ppo_epochs = rlhf.get('ppo_epochs', 4)
-    args.ppo_batch_size = rlhf.get('ppo_batch_size', 32)
+    args.rlhf_frequency = to_int(rlhf.get('rlhf_frequency'), 5)
+    args.rlhf_iterations = to_int(rlhf.get('rlhf_iterations'), 100)
+    args.rlhf_steps_per_iteration = to_int(rlhf.get('rlhf_steps_per_iteration'), 1000)
+    args.ppo_epochs = to_int(rlhf.get('ppo_epochs'), 4)
+    args.ppo_batch_size = to_int(rlhf.get('ppo_batch_size'), 32)
     
     # Evaluation config
     evaluation = config.get('evaluation', {})
-    args.eval_frequency = evaluation.get('eval_frequency', 5)
+    args.eval_frequency = to_int(evaluation.get('eval_frequency'), 5)
     
     # Logging config
     logging_cfg = config.get('logging', {})
-    args.use_mlflow = logging_cfg.get('use_mlflow', False)
+    args.use_mlflow = to_bool(logging_cfg.get('use_mlflow'), False)
     args.mlflow_tracking_uri = logging_cfg.get('mlflow_tracking_uri', 'file:./mlruns')
     args.mlflow_experiment = logging_cfg.get('mlflow_experiment', 'UltraThinking-LLM-Training')
     args.run_name = logging_cfg.get('run_name', 'ultrathink_training')
