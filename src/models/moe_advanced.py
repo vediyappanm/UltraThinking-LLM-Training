@@ -76,7 +76,10 @@ class NoisyTopKRouter(nn.Module):
         batch_size, seq_len, hidden_dim = hidden_states.shape
         hidden_states_flat = hidden_states.view(-1, hidden_dim)  # [B*S, H]
         
-        # Compute router logits
+        # Store original dtype for consistency
+        original_dtype = hidden_states.dtype
+        
+        # Compute router logits - ensure dtype consistency
         logits = self.gate(hidden_states_flat)  # [B*S, E]
         
         # Add noise during training for exploration
@@ -85,12 +88,13 @@ class NoisyTopKRouter(nn.Module):
             noise = torch.randn_like(logits) * F.softplus(noise_logits)
             logits = logits + noise * self.noise_std
         
-        # Compute top-k experts
-        scores = F.softmax(logits, dim=-1)
+        # Compute top-k experts - cast to float32 for numerical stability
+        scores = F.softmax(logits.float(), dim=-1)
         top_k_scores, top_k_indices = torch.topk(scores, self.top_k, dim=-1)
         
-        # Renormalize top-k scores
+        # Renormalize top-k scores and cast back to original dtype
         top_k_scores = top_k_scores / top_k_scores.sum(dim=-1, keepdim=True)
+        top_k_scores = top_k_scores.to(original_dtype)
         
         # Create dispatch mask [B*S, E, K]
         dispatch_mask = torch.zeros(
@@ -126,8 +130,9 @@ class NoisyTopKRouter(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """Compute load balancing auxiliary losses"""
         # Load balancing loss (encourage equal expert usage)
+        # Cast to float32 for numerical stability in loss computation
         expert_usage = dispatch_mask.float().sum(dim=(0, 2))  # [E]
-        expert_usage = expert_usage / expert_usage.sum()
+        expert_usage = expert_usage / (expert_usage.sum() + 1e-10)
         
         # Ideal uniform distribution
         uniform_distribution = torch.ones_like(expert_usage) / self.num_experts
@@ -135,7 +140,7 @@ class NoisyTopKRouter(nn.Module):
             torch.log(expert_usage + 1e-10),
             uniform_distribution,
             reduction='batchmean'
-        )
+        ).float()
         
         # Importance loss (encourage diversity in routing)
         importance = scores.mean(dim=0)  # [E]
