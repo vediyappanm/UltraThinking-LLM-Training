@@ -411,11 +411,14 @@ class ConstitutionalReasoningCore(nn.Module):
     ) -> Dict[str, Any]:
         """Forward pass with constitutional reasoning"""
         
-        # Get base model output
+        # Accept externally computed hidden_states but do not pass to base_model
+        provided_hidden_states = kwargs.pop('hidden_states', None)
+        
+        # Get base model output (with cleaned kwargs)
         base_output = self.base_model(input_ids, labels=labels, **kwargs)
         
         # Extract hidden states
-        hidden_states = base_output.get('hidden_states')
+        hidden_states = provided_hidden_states if provided_hidden_states is not None else base_output.get('hidden_states')
         if hidden_states is None:
             # Use logits as proxy
             hidden_states = base_output['logits']

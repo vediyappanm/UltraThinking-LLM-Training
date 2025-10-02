@@ -158,8 +158,11 @@ class NoisyTopKRouter(nn.Module):
         ).float()
         
         # Importance loss (encourage diversity in routing)
-        importance = scores.mean(dim=0)  # [E]
-        importance_loss = torch.var(importance) / (torch.mean(importance) ** 2 + 1e-10)
+        importance = scores.mean(dim=0).float()  # [E]
+        if importance.numel() < 2:
+            importance_loss = torch.tensor(0.0, device=importance.device, dtype=torch.float32)
+        else:
+            importance_loss = torch.var(importance, unbiased=False) / (torch.mean(importance) ** 2 + 1e-10)
         
         # Z-loss (encourage router confidence)
         log_z = torch.logsumexp(scores, dim=-1)
