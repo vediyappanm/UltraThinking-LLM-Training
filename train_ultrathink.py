@@ -835,6 +835,7 @@ def parse_args():
     parser.add_argument('--use_flash_attention', action='store_true')
     parser.add_argument('--gradient_checkpointing', action='store_true')
     parser.add_argument('--use_amp', action='store_true')
+    parser.add_argument('--amp_warmup_steps', type=int, default=0, help='Disable AMP for first N optimizer steps to stabilize training')
     
     # Distributed training
     parser.add_argument('--distributed', action='store_true')
@@ -883,6 +884,7 @@ def parse_args():
     parser.add_argument('--mlflow_tracking_uri', type=str, default='file:./mlruns', help='MLflow tracking URI (default: local ./mlruns)')
     parser.add_argument('--mlflow_experiment', type=str, default='UltraThinking-LLM-Training', help='MLflow experiment name')
     parser.add_argument('--run_name', type=str, default='ultrathink_training')
+    parser.add_argument('--perf_log_interval', type=int, default=200, help='Log performance metrics every N batches')
 
     # Output
     parser.add_argument('--output_dir', type=str, default='./outputs/ultrathink')
