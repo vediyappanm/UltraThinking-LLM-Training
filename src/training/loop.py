@@ -3,6 +3,12 @@ import time
 import torch
 from typing import Dict, Tuple, Optional
 
+try:
+    import mlflow
+    MLFLOW_AVAILABLE = True
+except ImportError:
+    MLFLOW_AVAILABLE = False
+
 
 def _is_deepspeed_engine(obj) -> bool:
     return hasattr(obj, "backward") and hasattr(obj, "step") and hasattr(obj, "module")
@@ -102,15 +108,38 @@ def train_one_epoch(
                 mem_res = torch.cuda.memory_reserved() / (1024**2)
                 print(f"[mem] step={global_step} alloc_mb={mem_alloc:.1f} reserved_mb={mem_res:.1f}")
 
-        # Tokens/sec logging per iteration (approx)
+        # Loss and performance logging per interval
         if (batch_idx + 1) % max(1, int(getattr(args, "perf_log_interval", 200))) == 0 and is_main_process:
+            # Calculate current step loss (unscaled for gradient accumulation)
+            step_loss = float(loss.detach()) * args.gradient_accumulation_steps
+            try:
+                # Calculate perplexity from loss
+                perplexity = math.exp(min(step_loss, 20))  # Cap at 20 to avoid overflow
+            except (OverflowError, ValueError):
+                perplexity = float('inf')
+            
+            # Token throughput
             try:
                 toks = int(batch['input_ids'].numel())
             except Exception:
                 toks = 0
             step_time = time.time() - step_start
-            if step_time > 0 and toks > 0:
-                print(f"[speed] step={global_step} toks={toks} toks/s={toks/step_time:.1f}")
+            toks_per_sec = toks / step_time if step_time > 0 and toks > 0 else 0.0
+            
+            # Log loss, perplexity, and throughput to console
+            print(f"[step] step={global_step} loss={step_loss:.4f} ppl={perplexity:.2f} toks/s={toks_per_sec:.1f}")
+            
+            # Log to MLflow if available and enabled
+            if MLFLOW_AVAILABLE and getattr(args, "use_mlflow", False):
+                try:
+                    mlflow.log_metrics({
+                        'train/step_loss': step_loss,
+                        'train/step_perplexity': perplexity if perplexity != float('inf') else 1e10,
+                        'train/tokens_per_sec': toks_per_sec,
+                        'train/learning_rate': float(scheduler.get_last_lr()[0]) if scheduler is not None else 0.0,
+                    }, step=global_step)
+                except Exception as e:
+                    pass  # Silent fail for MLflow logging
         last_step_time = time.time()
 
         # Profiler step if provided
@@ -124,12 +153,30 @@ def train_one_epoch(
     epoch_time = time.time() - start_time
     avg_loss = total_loss / max(1, num_batches)
     if is_main_process:
+        # Calculate epoch-level perplexity
+        try:
+            avg_perplexity = math.exp(min(avg_loss, 20))
+        except (OverflowError, ValueError):
+            avg_perplexity = float('inf')
+        
         toks = (len(train_loader.dataset) * getattr(args, "max_seq_length", 1)) if hasattr(train_loader, "dataset") else 0
         if toks:
             toks_per_sec = toks / max(1e-6, epoch_time)
         else:
             toks_per_sec = 0.0
-        print(f"[train] avg_loss={avg_loss:.4f} epoch_time={epoch_time:.1f}s toks/s={toks_per_sec:.1f}")
+        print(f"[train] avg_loss={avg_loss:.4f} avg_ppl={avg_perplexity:.2f} epoch_time={epoch_time:.1f}s toks/s={toks_per_sec:.1f}")
+        
+        # Log epoch summary to MLflow
+        if MLFLOW_AVAILABLE and getattr(args, "use_mlflow", False):
+            try:
+                mlflow.log_metrics({
+                    'train/epoch_avg_loss': avg_loss,
+                    'train/epoch_avg_perplexity': avg_perplexity if avg_perplexity != float('inf') else 1e10,
+                    'train/epoch_time_sec': epoch_time,
+                }, step=global_step)
+            except Exception:
+                pass
+        
         # Grad norm histogram summary
         if grad_norms:
             import numpy as np
@@ -148,9 +195,35 @@ def validate_epoch(*, model, val_loader, device, is_main_process: bool) -> float
         for batch in val_loader:
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**batch)
-            total_loss += float(outputs["loss"].detach())
+            step_loss = float(outputs["loss"].detach())
+            total_loss += step_loss
             num += 1
+            
+            # Log validation progress every 50 steps
+            if num % 50 == 0 and is_main_process:
+                try:
+                    step_ppl = math.exp(min(step_loss, 20))
+                except (OverflowError, ValueError):
+                    step_ppl = float('inf')
+                print(f"[val_progress] batch={num} loss={step_loss:.4f} ppl={step_ppl:.2f}")
+    
     avg = total_loss / max(1, num)
     if is_main_process:
-        print(f"[val] avg_loss={avg:.4f}")
+        try:
+            avg_ppl = math.exp(min(avg, 20))
+        except (OverflowError, ValueError):
+            avg_ppl = float('inf')
+        print(f"[val] avg_loss={avg:.4f} avg_ppl={avg_ppl:.2f}")
+        
+        # Log validation results to MLflow
+        # Note: We don't have global_step here, so we log without step parameter
+        # MLflow will use the current run's step counter
+        if MLFLOW_AVAILABLE:
+            try:
+                mlflow.log_metrics({
+                    'val/avg_loss': avg,
+                    'val/avg_perplexity': avg_ppl if avg_ppl != float('inf') else 1e10,
+                })
+            except Exception:
+                pass
     return avg
