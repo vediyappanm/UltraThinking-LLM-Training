@@ -1,0 +1,73 @@
+# Small Model Configuration - For Testing & Development
+# Suitable for: Local machines, small GPUs (4-8GB VRAM)
+
+model:
+  vocab_size: 100352
+  hidden_size: 512
+  num_layers: 6
+  num_heads: 8
+  num_kv_heads: 4  # GQA for efficiency
+  intermediate_size: 2048
+  max_seq_length: 1024
+  activation: swiglu
+  dropout: 0.1
+  attention_dropout: 0.1
+  use_flash_attention: true
+  gradient_checkpointing: true
+
+# Advanced Features (disabled for small model)
+advanced:
+  enable_moe: false
+  enable_dre: false
+  enable_constitutional: false
+  enable_rlhf: false
+  enable_multimodal: false
+  dre_warmup_steps: 1000
+
+# MoE Settings (if enabled)
+moe:
+  num_knowledge_experts: 8
+  num_skill_experts: 4
+  num_meta_experts: 2
+  num_safety_experts: 2
+  moe_top_k: 2
+  expert_capacity: 1.25
+
+# Training Configuration
+training:
+  batch_size: 4
+  gradient_accumulation_steps: 8
+  learning_rate: 3e-4
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  warmup_steps: 2000
+  max_steps: 100000
+  num_epochs: 3
+  gradient_clipping: 1.0
+  use_amp: true
+
+# Data Configuration
+data:
+  dataset: wikitext
+  dataset_subset: wikitext-103-v1
+  tokenizer_name: gpt2
+  train_samples: 50000
+  val_samples: 5000
+  num_workers: 2
+  streaming: false
+
+# Evaluation
+evaluation:
+  eval_frequency: 1
+  
+# Logging
+logging:
+  use_mlflow: true
+  mlflow_tracking_uri: file:./mlruns
+  mlflow_experiment: UltraThink-Small
+  run_name: small_model_training
+  
+# Output
+output:
+  output_dir: ./outputs/small_model

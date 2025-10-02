@@ -6,116 +6,215 @@
 
 **Production-ready training framework for advanced Large Language Models**
 
-ULTRATHINK provides a complete, modular stack for training custom LLMs with:
-- Advanced architectures (GQA, RoPE, SwiGLU)
-- Distributed training (DeepSpeed, Accelerate)
-- Dynamic reasoning and mixture-of-experts
-- Comprehensive testing and monitoring
+ULTRATHINK provides a complete, modular stack for training custom LLMs with state-of-the-art architectures, distributed training, and comprehensive monitoring.
 
-## Quick Start
+## ✨ Key Features
+
+- 🏗️ **Modern Architecture** - GQA, RoPE, SwiGLU, Flash Attention, RMSNorm
+- 🧠 **Advanced Components** - Mixture-of-Experts, Dynamic Reasoning Engine, Constitutional AI
+- 📊 **Production Monitoring** - MLflow, W&B, TensorBoard integration
+- ⚡ **Optimized Training** - DeepSpeed ZeRO, FSDP, gradient checkpointing, AMP
+- 🧪 **Fully Tested** - Unit & integration tests with pytest
+- 🐳 **Docker Support** - Ready-to-use containers for training and inference
+- 📚 **Complete Docs** - Step-by-step guides for all experience levels
+
+## 🚀 Quick Start
+
+### Installation
 
 ```bash
-# Install
+# Clone repository
 git clone https://github.com/vediyappanm/UltraThinking-LLM-Training.git
 cd UltraThinking-LLM-Training/deep
+
+# Install dependencies
 pip install -r requirements.txt
-
-# Train (small model, CPU-friendly)
-python train_ultrathink.py \
-  --hidden_size 256 --num_layers 2 --num_heads 4 \
-  --batch_size 2 --max_samples 1000 \
-  --dataset wikitext
-
-# Profile performance
-python scripts/profile_model.py --size tiny
-
-# Run tests
-pytest
 ```
 
-## Key Features
+### Training Examples
 
-- **🏗️ Modern Architecture** - GQA, RoPE, SwiGLU, Flash Attention
-- **📊 Production Monitoring** - Real-time metrics, W&B, TensorBoard
-- **🔒 Enterprise Security** - Input validation, safe configs
-- **🧪 Fully Tested** - 60%+ code coverage, unit & integration tests
-- **📚 Complete Documentation** - Step-by-step guides for all levels
-- **⚡ Optimized Training** - DeepSpeed ZeRO, gradient checkpointing, AMP
+**Tiny Model (CPU-friendly, for testing):**
+```bash
+python train_ultrathink.py \
+  --dataset wikitext \
+  --hidden_size 256 --num_layers 2 --num_heads 4 \
+  --batch_size 2 --max_samples 1000 \
+  --num_epochs 1
+```
 
+**Small Model (GPU recommended):**
+```bash
+python train_advanced.py --config configs/train_small.yaml
+```
 
-## Architecture (Diagram)
+**With Advanced Features:**
+```bash
+python train_ultrathink.py \
+  --dataset c4 --streaming \
+  --hidden_size 768 --num_layers 12 --num_heads 12 \
+  --enable_moe --enable_dre --enable_constitutional \
+  --use_amp --gradient_checkpointing \
+  --use_mlflow
+```
 
-![ULTRATHINK Architecture](docs/images/architecture.png)
+### Docker
+
+```bash
+# Run Gradio web interface
+docker compose up
+
+# Or build and run manually
+docker build -t ultrathink:latest .
+docker run -p 7860:7860 ultrathink:latest
+```
+
+### Testing
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=src --cov-report=html
+
+# Quick smoke test
+python tests/smoke_test.py
+```
 
 ## 📚 Documentation
 
-| Getting Started | Training | Reference | Deep Dives |
-|----------------|----------|-----------|------------|
-| [Installation](INSTALLATION_GUIDE.md) | [Small Models](docs/training_small.md) | [Model Card](MODEL_CARD.md) | [**Project Structure**](PROJECT_STRUCTURE.md) ⭐ |
-| [First Run](docs/getting_started.md) | [DeepSpeed](docs/training_deepspeed.md) | [Testing](TESTING_GUIDE.md) | [**Architecture**](ARCHITECTURE_OVERVIEW.md) ⭐ |
-| [Google Colab](docs/colab.md) | [Distributed](docs/accelerate.md) | [Development](docs/development.md) | [**Quick Reference**](QUICK_REFERENCE.md) ⭐ |
-| | [Datasets](docs/datasets.md) | [FAQ](docs/faq.md) | |
+### Essential Guides
+- **[Training Quickstart](TRAINING_QUICKSTART.md)** - Get started in 5 minutes
+- **[Advanced Training Guide](ADVANCED_TRAINING_GUIDE.md)** - Deep dive into all features
+- **[Project Structure](PROJECT_STRUCTURE.md)** - Understanding the codebase
+- **[Architecture Overview](ARCHITECTURE_OVERVIEW.md)** - Visual system diagrams
+- **[Model Card](MODEL_CARD.md)** - Model specifications and benchmarks
+
+### Training Guides
+- [Small Models](docs/training_small.md) - Train on limited hardware
+- [DeepSpeed Integration](docs/training_deepspeed.md) - Distributed training setup
+- [Dataset Configuration](docs/datasets.md) - Using custom datasets
+- [Google Colab](docs/colab.md) - Train in the cloud for free
+
+### Community
+- **[Contributing](CONTRIBUTING.md)** - Contribution guidelines
+- **[Code of Conduct](CODE_OF_CONDUCT.md)** - Community standards
+- **[Changelog](CHANGELOG.md)** - Version history
 
 **[📖 Full Documentation Index](docs/README.md)**
 
-> 🆕 **New Comprehensive Guides**: Check out [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for folder-by-folder explanation and [ARCHITECTURE_OVERVIEW.md](ARCHITECTURE_OVERVIEW.md) for visual diagrams!
-
-## Project Structure
+## 📁 Project Structure
 
 ```
 deep/
 ├── train_ultrathink.py        # Main training script
+├── train_advanced.py          # YAML config-based training
+├── app_gradio.py              # Web UI for inference
 ├── src/
-│   ├── models/               # Architecture, MoE, DRE, multimodal
-│   ├── data/                 # Datasets and validation
-│   ├── training/             # Optimizers, distributed training
+│   ├── models/               # UltraThink, MoE, DRE, architecture
+│   ├── data/                 # Datasets, tokenization, validation
+│   ├── training/             # Optimizers, distributed, RLHF
 │   ├── monitoring/           # Metrics and system monitoring
 │   ├── security/             # Input validation and safety
-│   └── evaluation/           # Benchmarks
+│   └── evaluation/           # Benchmarks and metrics
 ├── tests/                    # Unit and integration tests
-├── scripts/                  # Profiling and utility scripts
-└── docs/                     # Documentation
+├── configs/                  # YAML configuration files
+├── scripts/                  # Utilities (profiling, inference)
+└── docs/                     # Documentation and guides
 ```
 
-## Contributing
+See **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** for detailed explanations.
 
-We welcome contributions! Please see:
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) - Community standards
-- [Development Guide](docs/development.md) - Technical details
+## 🔥 Training Examples
 
-## Docker
-
+### Small Dataset Training
 ```bash
-# Build
-docker build -t ultrathink:latest .
-
-# Run training
-docker run --rm -it ultrathink:latest \
-  python train_ultrathink.py --hidden_size 256 --num_layers 2
-
-# Or use docker-compose
-docker compose up
+# WikiText-2 (fast iteration)
+python train_ultrathink.py \
+  --dataset wikitext \
+  --hidden_size 512 --num_layers 6 --num_heads 8 \
+  --batch_size 4 --num_epochs 3 \
+  --use_mlflow
 ```
 
-## Example: Training on C4
-
+### Production Training (C4 Dataset)
 ```bash
-# Recommended: Small model on streaming C4
+# Streaming C4 with all optimizations
 python train_ultrathink.py \
   --dataset c4 --dataset_subset en --streaming \
-  --hidden_size 384 --num_layers 4 --num_heads 6 \
-  --batch_size 1 --gradient_accumulation_steps 64 \
-  --learning_rate 5e-5 --use_amp --gradient_checkpointing \
-  --max_seq_length 512 \
-  --output_dir ./outputs/c4_small
+  --hidden_size 768 --num_layers 12 --num_heads 12 \
+  --batch_size 2 --gradient_accumulation_steps 64 \
+  --learning_rate 3e-4 --warmup_steps 5000 \
+  --use_amp --gradient_checkpointing \
+  --max_seq_length 1024 \
+  --output_dir ./outputs/c4_production
 ```
 
-## Testing & Quality
-
+### Using Configuration Files
 ```bash
-pytest                          # Run all tests
-pytest --cov=src               # With coverage
-python scripts/profile_model.py # Profile performance
-python scripts/cleanup.py       # Clean cache files
+# Small model (4-8GB GPU)
+python train_advanced.py --config configs/train_small.yaml
+
+# Medium model (16-32GB GPU)
+python train_advanced.py --config configs/train_medium.yaml
+
+# Large model (40GB+ GPU)
+python train_advanced.py --config configs/train_large.yaml
+```
+
+## 🐳 Docker Usage
+
+**Web Interface (Gradio):**
+```bash
+docker compose up
+# Visit http://localhost:7860
+```
+
+**Custom Training:**
+```bash
+docker run -v $(pwd)/outputs:/app/outputs ultrathink:latest \
+  python train_ultrathink.py \
+    --dataset wikitext \
+    --hidden_size 256 --num_layers 2 \
+    --output_dir /app/outputs/my_model
+```
+
+**GPU Training:**
+```bash
+docker run --gpus all \
+  -v $(pwd)/outputs:/app/outputs \
+  ultrathink:latest \
+  python train_ultrathink.py --use_amp
+```
+
+## 🤝 Contributing
+
+We welcome contributions! Please see:
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Guidelines and setup
+- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** - Community standards
+
+## 📊 Model Specifications
+
+| Size | Parameters | Layers | Hidden | Context | Min GPU |
+|------|-----------|--------|--------|---------|---------|
+| Tiny | 125M | 12 | 768 | 2048 | 6GB |
+| Small | 350M | 24 | 1024 | 4096 | 16GB |
+| Medium | 760M | 24 | 1536 | 4096 | 24GB |
+| Large | 1.3B | 32 | 2048 | 8192 | 40GB |
+
+See **[MODEL_CARD.md](MODEL_CARD.md)** for complete specifications.
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## 🙏 Citation
+
+```bibtex
+@software{ultrathink2025,
+  title={ULTRATHINK: Advanced LLM Training Framework},
+  author={ULTRATHINK Team},
+  year={2025},
+  url={https://github.com/vediyappanm/UltraThinking-LLM-Training}
+}
 ```

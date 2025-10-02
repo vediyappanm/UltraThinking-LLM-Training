@@ -1,30 +1,111 @@
-# Python
+# ============================================
+# Python artifacts
+# ============================================
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
 *.pyc
 *.pyo
 *.pyd
+.Python
 *.egg-info/
+dist/
+build/
+
+# ============================================
+# Virtual environments
+# ============================================
 .venv/
-.env
+venv/
+ENV/
+env/
+.virtualenv/
 
-# Node/Web
-node_modules/
-
-# OS / Misc
+# ============================================
+# IDE and editors
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
 
-# Git
+# ============================================
+# Version control
+# ============================================
 .git/
-.gitignore
+gitignore
+gitattributes
+.github/
 
-# Outputs, logs, checkpoints
-outputs/
+# ============================================
+# Testing and coverage
+# ============================================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+*.log
+
+# ============================================
+# Model artifacts (large files)
+# ============================================
 checkpoints/
-wandb/
-logs/
+outputs/
+mlruns/
+*.pth
+*.pt
+*.bin
+*.safetensors
+*.h5
+*.hdf5
+*.onnx
+
+# ============================================
+# Dataset cache
+# ============================================
 .cache/
-.huggingface/
+datasets_cache/
+transformers_cache/
+data/
+*.npy
+*.npz
+
+# ============================================
+# Documentation (optional - keep for reference)
+# ============================================
+# Uncomment to exclude docs from image
+# *.md
+# docs/
+# LICENSE
+# CHANGELOG.md
+
+# ============================================
+# Docker files (don't copy into container)
+# ============================================
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# ============================================
+# CI/CD
+# ============================================
+.github/
+.pre-commit-config.yaml
+
+# ============================================
+# Temporary and backup files
+# ============================================
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
 
 # Notebooks
 .ipynb_checkpoints/

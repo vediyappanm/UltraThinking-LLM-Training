@@ -1,0 +1,93 @@
+# Medium Model Configuration - Production Ready
+# Suitable for: Multi-GPU setups, cloud instances (16-32GB VRAM)
+
+model:
+  vocab_size: 100352
+  hidden_size: 2048
+  num_layers: 24
+  num_heads: 16
+  num_kv_heads: 8  # GQA
+  intermediate_size: 8192
+  max_seq_length: 4096
+  activation: swiglu
+  dropout: 0.05
+  attention_dropout: 0.05
+  use_flash_attention: true
+  gradient_checkpointing: true
+
+# Advanced Features
+advanced:
+  enable_moe: true
+  enable_dre: true
+  enable_constitutional: true
+  enable_rlhf: false  # Enable after pretraining
+  enable_multimodal: false
+  dre_warmup_steps: 5000
+
+# MoE Settings
+moe:
+  num_knowledge_experts: 32
+  num_skill_experts: 16
+  num_meta_experts: 8
+  num_safety_experts: 4
+  moe_top_k: 2
+  expert_capacity: 1.25
+
+# Training Configuration
+training:
+  batch_size: 8
+  gradient_accumulation_steps: 16
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  warmup_steps: 10000
+  max_steps: 500000
+  num_epochs: 3
+  gradient_clipping: 1.0
+  use_amp: true
+
+# Distributed Training
+distributed:
+  enabled: true
+  use_4d_parallelism: false
+  data_parallel_size: 1
+  tensor_parallel_size: 1
+  pipeline_parallel_size: 1
+  expert_parallel_size: 1
+  zero_stage: 2
+  deepspeed_config: ./config/deepspeed_z2.json
+
+# Data Configuration
+data:
+  dataset: pile
+  mix_datasets: "wikitext:0.3,openwebtext:0.4,pile:0.3"
+  tokenizer_name: gpt2
+  max_samples: null
+  train_samples: 500000
+  val_samples: 10000
+  num_workers: 8
+  streaming: true
+
+# Evaluation
+evaluation:
+  eval_frequency: 3
+  
+# RLHF Configuration (for fine-tuning phase)
+rlhf:
+  rlhf_frequency: 5
+  rlhf_iterations: 100
+  rlhf_steps_per_iteration: 1000
+  ppo_epochs: 4
+  ppo_batch_size: 32
+
+# Logging
+logging:
+  use_mlflow: true
+  mlflow_tracking_uri: file:./mlruns
+  mlflow_experiment: UltraThink-Medium
+  run_name: medium_model_training
+  
+# Output
+output:
+  output_dir: ./outputs/medium_model

@@ -1,25 +1,129 @@
 version: "3.9"
+
 services:
-  ultrathink-app:
+  # ============================================
+  # Web Interface (Gradio)
+  # ============================================
+  app:
     build:
       context: .
       dockerfile: Dockerfile
+      target: production
     image: ultrathink:latest
     container_name: ultrathink_app
     ports:
-      - "7860:7860"
-      - "8000:8000"
+      - "7860:7860"  # Gradio UI
+      - "8000:8000"  # FastAPI (if used)
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - GRADIO_SERVER_PORT=7860
+    volumes:
+      - ./outputs:/app/outputs:rw
+      - ./checkpoints:/app/checkpoints:rw
+    command: ["python", "app_gradio.py"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # Training Service (CPU)
+  # ============================================
+  train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: training
+    image: ultrathink:training
+    container_name: ultrathink_train
     environment:
       - PYTHONUNBUFFERED=1
       - TORCHDYNAMO_DISABLE=1
-      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     volumes:
-      - .:/app
-    command: ["python", "app_gradio.py"]
-    # For GPU, uncomment the following and run with: docker compose --profile gpu up
-    # profiles: ["gpu"]
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - capabilities: ["gpu"]
+      - ./outputs:/app/outputs:rw
+      - ./checkpoints:/app/checkpoints:rw
+      - ./configs:/app/configs:ro
+    command: >
+      python train_ultrathink.py
+      --dataset wikitext
+      --hidden_size 256
+      --num_layers 2
+      --num_heads 4
+      --batch_size 2
+      --num_epochs 1
+      --output_dir /app/outputs/demo
+    profiles: ["train"]
+
+  # ============================================
+  # Training Service (GPU)
+  # ============================================
+  train-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: training
+    image: ultrathink:training
+    container_name: ultrathink_train_gpu
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ./outputs:/app/outputs:rw
+      - ./checkpoints:/app/checkpoints:rw
+      - ./configs:/app/configs:ro
+    command: >
+      python train_advanced.py
+      --config /app/configs/train_small.yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles: ["train-gpu"]
+
+  # ============================================
+  # MLflow Tracking Server
+  # ============================================
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.9.2
+    container_name: ultrathink_mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlflow/mlruns:rw
+    command: >
+      mlflow server
+      --backend-store-uri file:///mlflow/mlruns
+      --default-artifact-root /mlflow/mlruns
+      --host 0.0.0.0
+      --port 5000
+    profiles: ["mlflow"]
+    restart: unless-stopped
+
+  # ============================================
+  # Development Environment
+  # ============================================
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    image: ultrathink:dev
+    container_name: ultrathink_dev
+    ports:
+      - "7860:7860"
+      - "8888:8888"  # Jupyter
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - .:/app:rw
+    command: ["bash"]
+    stdin_open: true
+    tty: true
+    profiles: ["dev"]
