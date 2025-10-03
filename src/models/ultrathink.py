@@ -256,11 +256,10 @@ class UltraThinkCore(nn.Module):
                         if aux_loss is not None:
                             total_aux_loss += aux_loss
                         
-                        # Collect MoE info if available
-                        if hasattr(moe_layer, 'moe') and hasattr(moe_layer.moe, 'forward'):
+                        # Collect MoE info if available (from the layer's last forward pass)
+                        if hasattr(moe_layer, 'last_moe_info'):
                             try:
-                                # Get MoE info from the layer
-                                _, layer_moe_info = moe_layer.moe(hidden_states, return_all_levels=True)
+                                layer_moe_info = moe_layer.last_moe_info
                                 if layer_moe_info and 'expert_utilization' in layer_moe_info:
                                     moe_info = layer_moe_info  # Use the latest layer's info
                             except Exception:

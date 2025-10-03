@@ -157,7 +157,11 @@ def train_one_epoch(
                     total_aux = 0.0
                     for key, loss_val in aux_losses.items():
                         if isinstance(loss_val, torch.Tensor):
-                            total_aux += float(loss_val.detach())
+                            # Handle both scalar and multi-element tensors
+                            if loss_val.numel() == 1:
+                                total_aux += float(loss_val.detach())
+                            else:
+                                total_aux += float(loss_val.detach().mean())
                     aux_loss_value = total_aux
                     moe_metrics['aux_loss'] = aux_loss_value
             

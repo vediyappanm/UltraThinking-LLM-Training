@@ -563,6 +563,9 @@ class MoELayer(nn.Module):
         # MoE forward pass
         moe_output, moe_info = self.moe(normed_hidden_states)
         
+        # Store MoE info for later access
+        self.last_moe_info = moe_info
+        
         # Apply dropout
         moe_output = self.dropout(moe_output)
         
