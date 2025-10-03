@@ -115,8 +115,8 @@ def train_one_epoch(
                 mem_res = torch.cuda.memory_reserved() / (1024**2)
                 print(f"[mem] step={global_step} alloc_mb={mem_alloc:.1f} reserved_mb={mem_res:.1f}")
 
-        # Loss and performance logging per interval
-        if (batch_idx + 1) % max(1, int(getattr(args, "perf_log_interval", 200))) == 0 and is_main_process:
+        # Loss and performance logging per interval (log after each gradient accumulation step)
+        if (batch_idx + 1) % args.gradient_accumulation_steps == 0 and is_main_process:
             # Calculate current step loss (unscaled for gradient accumulation)
             step_loss = float(loss.detach()) * args.gradient_accumulation_steps
             try:
