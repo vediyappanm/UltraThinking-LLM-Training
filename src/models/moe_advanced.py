@@ -45,6 +45,7 @@ class ExpertConfig:
     load_balance_weight: float = 0.01  # Primary load balancing loss
     z_loss_weight: float = 0.001  # Router logit regularization
     importance_weight: float = 0.01  # Routing diversity loss
+    entropy_reg_weight: float = 1.0  # NUCLEAR FIX: Direct entropy regularization
     aux_loss_weight: float = 0.01  # Legacy - kept for compatibility
     
     top_k: int = 2  # Number of experts to route to
@@ -113,12 +114,6 @@ class NoisyTopKRouter(nn.Module):
                 noise_logits = self.noise_linear(hs_fp32)
                 noise = torch.randn_like(logits) * F.softplus(noise_logits)
                 logits = logits + noise * self.noise_std
-            
-            # Add temperature scaling for better exploration during early training
-            if training:
-                # Use temperature=2.0 to make routing more uniform initially
-                temperature = 2.0
-                logits = logits / temperature
 
             # Softmax/topk in fp32
             scores = F.softmax(logits, dim=-1)
@@ -184,6 +179,14 @@ class NoisyTopKRouter(nn.Module):
         else:
             importance_loss = torch.var(importance, unbiased=False) / (torch.mean(importance) ** 2 + 1e-10)
         
+        # NUCLEAR FIX: Direct entropy regularization to force balanced routing
+        # Calculate entropy of routing distribution
+        routing_entropy = -torch.sum(scores * torch.log(scores + 1e-10), dim=-1).mean()
+        max_entropy = torch.log(torch.tensor(float(self.num_experts), device=scores.device))
+        
+        # Entropy regularization loss - encourage high entropy (uniform distribution)
+        entropy_reg_loss = (max_entropy - routing_entropy) * 10.0  # Strong penalty for low entropy
+        
         # Z-loss (encourage router confidence)
         log_z = torch.logsumexp(scores, dim=-1)
         z_loss = torch.mean(log_z ** 2)
@@ -192,6 +195,7 @@ class NoisyTopKRouter(nn.Module):
             'load_loss': load_loss,
             'importance_loss': importance_loss,
             'z_loss': z_loss,
+            'entropy_reg_loss': entropy_reg_loss,
             'expert_usage': expert_usage,
             'routing_entropy': -torch.sum(expert_usage * torch.log(expert_usage + 1e-10))
         }
@@ -610,6 +614,10 @@ class MoELayer(nn.Module):
                 elif 'importance_loss' in key:
                     # Importance loss - encourages diversity in routing decisions
                     total_aux_loss += importance_weight * loss
+                elif 'entropy_reg_loss' in key:
+                    # NUCLEAR FIX: Direct entropy regularization
+                    entropy_weight = getattr(self.config, 'entropy_reg_weight', 1.0)
+                    total_aux_loss += entropy_weight * loss
             
             aux_loss = total_aux_loss
         
