@@ -31,6 +31,10 @@ def train_one_epoch(
     total_loss = 0.0
     num_batches = 0
     grad_norms = []
+    
+    # Track gradient norms at loop level for logging
+    current_total_grad_norm = 0.0
+    current_router_grad_norm = 0.0
 
     start_time = time.time()
     last_step_time = time.time()
@@ -63,6 +67,7 @@ def train_one_epoch(
                     loss = outputs["loss"]
             else:
                 outputs = model(**batch, use_dre=use_dre_now)
+                loss = outputs["loss"]
             loss = loss / args.gradient_accumulation_steps
             
             # Skip if loss is not finite
@@ -77,18 +82,17 @@ def train_one_epoch(
             else:
                 loss.backward()
             
-            # CRITICAL FIX: Add gradient norm logging for debugging
-            total_grad_norm = 0.0
-            router_grad_norm = 0.0
-            if global_step % 5 == 0:  # Log every 5 steps
-                for name, param in model.named_parameters():
-                    if param.grad is not None:
-                        param_norm = param.grad.data.norm(2)
-                        total_grad_norm += param_norm.item() ** 2
-                        if 'gate' in name or 'router' in name:
-                            router_grad_norm += param_norm.item() ** 2
-                total_grad_norm = total_grad_norm ** (1. / 2)
-                router_grad_norm = router_grad_norm ** (1. / 2)
+            # CRITICAL FIX: Calculate gradient norms for all params
+            current_total_grad_norm = 0.0
+            current_router_grad_norm = 0.0
+            for name, param in model.named_parameters():
+                if param.grad is not None:
+                    param_norm = param.grad.data.norm(2)
+                    current_total_grad_norm += param_norm.item() ** 2
+                    if 'gate' in name or 'router' in name:
+                        current_router_grad_norm += param_norm.item() ** 2
+            current_total_grad_norm = current_total_grad_norm ** (1. / 2)
+            current_router_grad_norm = current_router_grad_norm ** (1. / 2)
             
             # Gradient clipping and optimizer step
             if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
@@ -119,9 +123,9 @@ def train_one_epoch(
                 mem_res = torch.cuda.memory_reserved() / (1024**2)
                 print(f"[mem] step={global_step} alloc_mb={mem_alloc:.1f} reserved_mb={mem_res:.1f}")
 
-        # Loss and performance logging per interval (log after each gradient accumulation step)
+        # ALWAYS LOG after each gradient accumulation step (simplified condition)
         should_log = (batch_idx + 1) % args.gradient_accumulation_steps == 0
-        if should_log and is_main_process:
+        if should_log:
             # Calculate current step loss (unscaled for gradient accumulation)
             step_loss = float(loss.detach()) * args.gradient_accumulation_steps
             try:
@@ -143,9 +147,12 @@ def train_one_epoch(
             dre_metrics = {}
             aux_loss_value = 0.0
             
-            # DEBUG: Print what we have in outputs
+            # CRITICAL DEBUG: Always print to confirm logging is working
+            print(f"[DEBUG] batch_idx={batch_idx}, global_step={global_step}, should_log={should_log}")
             if hasattr(outputs, 'keys'):
                 print(f"[DEBUG] outputs keys: {list(outputs.keys())}")
+            else:
+                print(f"[DEBUG] outputs type: {type(outputs)}")
             
             # DRE metrics extraction
             if hasattr(outputs, 'get') and outputs.get('routing_info'):
@@ -227,12 +234,12 @@ def train_one_epoch(
                 if dre_parts:
                     dre_str = f" dre=[{','.join(dre_parts)}]"
             
-            # Add gradient norm to output if available
+            # Add gradient norm to output
             grad_str = ""
-            if 'total_grad_norm' in locals() and total_grad_norm > 0:
-                grad_str = f" grad=[total={total_grad_norm:.3f}"
-                if router_grad_norm > 0:
-                    grad_str += f",router={router_grad_norm:.3f}"
+            if current_total_grad_norm > 0:
+                grad_str = f" grad=[total={current_total_grad_norm:.3f}"
+                if current_router_grad_norm > 0:
+                    grad_str += f",router={current_router_grad_norm:.3f}"
                 grad_str += "]"
             
             print(f"[step] step={global_step} loss={step_loss:.4f} ppl={perplexity:.2f} toks/s={toks_per_sec:.1f}{moe_str}{dre_str}{grad_str}")
