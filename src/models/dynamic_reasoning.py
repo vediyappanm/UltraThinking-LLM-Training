@@ -624,7 +624,9 @@ class DynamicReasoningEngine(nn.Module):
                 balance_loss = (probs.mean(dim=0) - target_uniform).pow(2).mean()
                 # Penalize expected latency (prefer cheaper paths unless LM loss demands otherwise)
                 # Relative costs for FAST, STANDARD, DEEP, ULTRA_DEEP
-                path_costs = torch.tensor([0.1, 1.0, 2.0, 3.0], dtype=probs.dtype, device=probs.device)
+                # Relative costs for FAST, STANDARD, EXPERT, DEEP, ULTRA_DEEP
+# Relative costs for FAST, STANDARD, EXPERT, DEEP, ULTRA_DEEP
+                path_costs = torch.tensor([0.1, 1.0, 1.5, 2.5, 4.0], dtype=probs.dtype, device=probs.device)
                 expected_cost = (probs * path_costs).sum(dim=-1).mean()
                 # Encourage higher confidence
                 conf_loss = -torch.log(confidence.clamp_min(1e-6)).mean()
