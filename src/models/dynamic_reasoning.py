@@ -261,12 +261,13 @@ class DynamicReasoningEngine(nn.Module):
         self.cache_misses = 0
         
         # Thresholds for routing (can be learned)
+        # Reordered so EXPERT sits between STANDARD and DEEP for better MoE engagement
         self.complexity_thresholds = {
             ReasoningPath.FAST: 0.2,
-            ReasoningPath.STANDARD: 0.4,
-            ReasoningPath.EXPERT: 0.7,
-            ReasoningPath.DEEP: 0.85,
-            ReasoningPath.ULTRA_DEEP: 0.95
+            ReasoningPath.STANDARD: 0.35,
+            ReasoningPath.EXPERT: 0.5,      # MoE experts - moderate complexity
+            ReasoningPath.DEEP: 0.75,       # Chain-of-thought - high complexity
+            ReasoningPath.ULTRA_DEEP: 0.9   # Recursive reasoning - very high complexity
         }
         
         # Latency tracking
