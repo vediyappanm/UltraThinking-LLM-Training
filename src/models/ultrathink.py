@@ -215,14 +215,14 @@ class UltraThinkCore(nn.Module):
                 if isinstance(rpath, str):
                     try:
                         rpath = ReasoningPath[rpath.upper()]
-                        print(f"[DEBUG] UltraThinkCore: normalized reasoning_path '{kwargs.get('reasoning_path')}' -> {rpath}")
+                        logger.info(f"[DEBUG] UltraThinkCore: normalized reasoning_path '{kwargs.get('reasoning_path')}' -> {rpath}")
                     except Exception:
                         rpath = None
-                        print(f"[DEBUG] UltraThinkCore: failed to normalize reasoning_path '{kwargs.get('reasoning_path')}'")
+                        logger.info(f"[DEBUG] UltraThinkCore: failed to normalize reasoning_path '{kwargs.get('reasoning_path')}'")
                 elif rpath is not None:
-                    print(f"[DEBUG] UltraThinkCore: reasoning_path already enum: {rpath}")
+                    logger.info(f"[DEBUG] UltraThinkCore: reasoning_path already enum: {rpath}")
                 else:
-                    print(f"[DEBUG] UltraThinkCore: no reasoning_path override (got: {kwargs.get('reasoning_path')})")
+                    logger.info(f"[DEBUG] UltraThinkCore: no reasoning_path override (got: {kwargs.get('reasoning_path')})")
                 dre_outputs = self.dre(
                     input_ids=input_ids,
                     text=text,

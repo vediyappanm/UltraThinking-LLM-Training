@@ -52,6 +52,11 @@ def train_one_epoch(
         use_dre_now = True
         if getattr(args, "dre_warmup_steps", 0) and global_step < args.dre_warmup_steps:
             use_dre_now = False
+        
+        # Debug: log the reasoning_path being passed
+        force_path = getattr(args, "dre_force_path", None)
+        if force_path:
+            logger.info(f"[DEBUG] Training loop passing reasoning_path={force_path} to model")
 
         if _is_deepspeed_engine(model):
             outputs = model(
