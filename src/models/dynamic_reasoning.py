@@ -20,6 +20,7 @@ class ReasoningPath(Enum):
     """Available reasoning paths with different compute requirements"""
     FAST = "fast"  # <100ms - cached/simple responses
     STANDARD = "standard"  # 1-5s - normal forward pass
+    EXPERT = "expert"  # expert MoE path (activates experts)
     DEEP = "deep"  # 10-60s - chain-of-thought
     ULTRA_DEEP = "ultra_deep"  # minutes - recursive reasoning
 
@@ -36,6 +37,7 @@ class ComplexityFeatures:
     conversation_depth: int
     prior_failures: int = 0
     user_preference_score: float = 0.5
+    use_moe: bool = False  # Whether to use MoE for this path
     domain_signals: Dict[str, float] = field(default_factory=dict)
 
 
@@ -243,6 +245,14 @@ class DynamicReasoningEngine(nn.Module):
             hidden_dim=config.get('hidden_dim', 4096),
             n_paths=len(ReasoningPath)
         )
+        # Hidden-state based complexity head to avoid placeholder randomness and to vary per-input
+        self.hidden_complexity_head = nn.Sequential(
+            nn.Linear(config.get('hidden_dim', 4096), 256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(256, 1),
+            nn.Sigmoid(),
+        )
         
         # Caching
         self.enable_caching = enable_caching
@@ -253,8 +263,9 @@ class DynamicReasoningEngine(nn.Module):
         # Thresholds for routing (can be learned)
         self.complexity_thresholds = {
             ReasoningPath.FAST: 0.2,
-            ReasoningPath.STANDARD: 0.5,
-            ReasoningPath.DEEP: 0.8,
+            ReasoningPath.STANDARD: 0.4,
+            ReasoningPath.EXPERT: 0.7,
+            ReasoningPath.DEEP: 0.85,
             ReasoningPath.ULTRA_DEEP: 0.95
         }
         
@@ -417,13 +428,23 @@ class DynamicReasoningEngine(nn.Module):
         # Extract features
         features = self.complexity_scorer.extract_features(text, input_ids[0])
         
-        # Get complexity score
-        complexity_score = self.complexity_scorer(features).item()
+        # Get complexity score - combine hidden-state signal with features for better variation
+        # Use base embeddings as input signal but DETACH to avoid training the base model from DRE aux loss
+        embeddings = self.base_model.embed_tokens(input_ids).detach()
+        pooled = embeddings.mean(dim=1)  # [batch, hidden_dim]
+        complexity_hidden = self.hidden_complexity_head(pooled).squeeze(-1)  # [batch]
+        complexity_features = self.complexity_scorer(features).squeeze()
+        # Blend signals; if batch, average feature score across batch for stability
+        if isinstance(complexity_features, torch.Tensor) and complexity_features.dim() == 0:
+            complexity_features_tensor = complexity_features
+        else:
+            # Coerce to tensor on the right device/dtype
+            complexity_features_tensor = torch.as_tensor(complexity_features, dtype=complexity_hidden.dtype, device=complexity_hidden.device)
+        complexity_score_tensor = 0.7 * complexity_hidden + 0.3 * complexity_features_tensor
+        complexity_score = float(complexity_score_tensor.mean().detach().cpu().item())
         
-        # Get router prediction
-        with torch.no_grad():
-            embeddings = self.base_model.embed_tokens(input_ids)
-            probs, confidence = self.router(embeddings, features)
+        # Get router prediction (allow grads for router so it can learn via aux loss)
+        probs, confidence = self.router(embeddings, features)
         
         # Override if specified
         if override_path:
@@ -451,16 +472,24 @@ class DynamicReasoningEngine(nn.Module):
         path_idx = probs.argmax(dim=-1).item()
         selected_path = list(ReasoningPath)[path_idx]
         
-        # Apply complexity threshold override
-        if complexity_score < self.complexity_thresholds[ReasoningPath.FAST]:
-            selected_path = ReasoningPath.FAST
-        elif complexity_score < self.complexity_thresholds[ReasoningPath.STANDARD]:
-            selected_path = ReasoningPath.STANDARD
-        elif complexity_score < self.complexity_thresholds[ReasoningPath.DEEP]:
-            selected_path = ReasoningPath.DEEP
-        elif complexity_score >= self.complexity_thresholds[ReasoningPath.ULTRA_DEEP]:
-            selected_path = ReasoningPath.ULTRA_DEEP
+        # Apply complexity threshold override only when NOT training
+        # During training, allow the router to learn the mapping; rely on thresholds at inference time
+        if not self.training:
+            if complexity_score < self.complexity_thresholds[ReasoningPath.FAST]:
+                selected_path = ReasoningPath.FAST
+            elif complexity_score < self.complexity_thresholds[ReasoningPath.STANDARD]:
+                selected_path = ReasoningPath.STANDARD
+            elif complexity_score < self.complexity_thresholds[ReasoningPath.DEEP]:
+                selected_path = ReasoningPath.DEEP
+            elif complexity_score >= self.complexity_thresholds[ReasoningPath.ULTRA_DEEP]:
+                selected_path = ReasoningPath.ULTRA_DEEP
         
+        # Stash tensors for aux loss computation during forward()
+        self._last_router_tensors = {
+            'probs': probs,  # [batch, n_paths]
+            'confidence': confidence,  # [batch]
+            'complexity': complexity_score_tensor,  # [batch]
+        }
         probs_np = probs.detach().to(torch.float32).cpu().numpy()
         return RoutingDecision(
             path=selected_path,
@@ -559,6 +588,10 @@ class DynamicReasoningEngine(nn.Module):
         elif routing_decision.path == ReasoningPath.STANDARD:
             output = self._standard_inference(input_ids, **kwargs)
             
+        elif routing_decision.path == ReasoningPath.EXPERT:
+            # Expert path shares the same base forward; UltraThinkCore will apply MoE based on routing_info['use_moe']
+            output = self._standard_inference(input_ids, **kwargs)
+            
         elif routing_decision.path == ReasoningPath.DEEP:
             output = self._deep_inference(input_ids, **kwargs)
             
@@ -578,6 +611,25 @@ class DynamicReasoningEngine(nn.Module):
         self.complexity_scores.append(routing_decision.complexity_score)
         self.confidence_scores.append(routing_decision.confidence)
         
+        # Compute a small auxiliary loss to train the router (balance + latency + confidence)
+        dre_aux_loss = None
+        try:
+            if self.training and hasattr(self, '_last_router_tensors'):
+                probs = self._last_router_tensors['probs']  # [batch, n_paths]
+                confidence = self._last_router_tensors['confidence']  # [batch]
+                # Encourage balanced usage across paths (Switch-Transformer style)
+                target_uniform = torch.full_like(probs[0], 1.0 / probs.shape[-1])
+                balance_loss = (probs.mean(dim=0) - target_uniform).pow(2).mean()
+                # Penalize expected latency (prefer cheaper paths unless LM loss demands otherwise)
+                # Relative costs for FAST, STANDARD, DEEP, ULTRA_DEEP
+                path_costs = torch.tensor([0.1, 1.0, 2.0, 3.0], dtype=probs.dtype, device=probs.device)
+                expected_cost = (probs * path_costs).sum(dim=-1).mean()
+                # Encourage higher confidence
+                conf_loss = -torch.log(confidence.clamp_min(1e-6)).mean()
+                dre_aux_loss = balance_loss + 0.1 * expected_cost + 0.01 * conf_loss
+        except Exception:
+            dre_aux_loss = None
+        
         # Track reasoning steps for deep paths
         if routing_decision.path in [ReasoningPath.DEEP, ReasoningPath.ULTRA_DEEP]:
             steps = routing_decision.debug_info.get('reasoning_steps', 1)
@@ -590,8 +642,12 @@ class DynamicReasoningEngine(nn.Module):
             'confidence': routing_decision.confidence,
             'latency_ms': latency_ms,
             'debug': routing_decision.debug_info,
-            'dre_metrics': self.get_current_metrics()
+            'dre_metrics': self.get_current_metrics(),
+            'use_moe': (routing_decision.path == ReasoningPath.EXPERT)
         }
+        # Expose aux loss to the trainer for joint optimization
+        if dre_aux_loss is not None:
+            output['dre_aux_loss'] = dre_aux_loss
         
         # Avoid issues with torch.compile/torch._dynamo tracing Python f-strings and time
         try:

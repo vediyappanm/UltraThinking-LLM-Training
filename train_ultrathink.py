@@ -827,6 +827,9 @@ def parse_args():
     parser.add_argument('--enable_constitutional', action='store_true')
     parser.add_argument('--enable_rlhf', action='store_true')
     parser.add_argument('--dre_warmup_steps', type=int, default=0, help='Disable DRE for first N optimizer steps to stabilize training')
+    parser.add_argument('--dre_force_path', type=str, default=None,
+                        choices=['fast', 'standard', 'expert', 'deep', 'ultra_deep'],
+                        help='Force a specific DRE path during training for debugging (default: None)')
     
     # Training settings
     parser.add_argument('--batch_size', type=int, default=32)

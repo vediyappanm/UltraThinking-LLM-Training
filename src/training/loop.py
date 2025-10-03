@@ -54,7 +54,11 @@ def train_one_epoch(
             use_dre_now = False
 
         if _is_deepspeed_engine(model):
-            outputs = model(**batch, use_dre=use_dre_now)
+            outputs = model(
+                **batch,
+                use_dre=use_dre_now,
+                reasoning_path=getattr(args, "dre_force_path", None)
+            )
             loss = outputs["loss"]
             model.backward(loss)
             model.step()
@@ -66,10 +70,18 @@ def train_one_epoch(
                 if getattr(args, "amp_warmup_steps", 0) and global_step < args.amp_warmup_steps:
                     amp_enabled = False
                 with torch.amp.autocast(device_type=device_type, enabled=amp_enabled):
-                    outputs = model(**batch, use_dre=use_dre_now)
+                    outputs = model(
+                        **batch,
+                        use_dre=use_dre_now,
+                        reasoning_path=getattr(args, "dre_force_path", None)
+                    )
                     loss = outputs["loss"]
             else:
-                outputs = model(**batch, use_dre=use_dre_now)
+                outputs = model(
+                    **batch,
+                    use_dre=use_dre_now,
+                    reasoning_path=getattr(args, "dre_force_path", None)
+                )
                 loss = outputs["loss"]
             loss = loss / args.gradient_accumulation_steps
             
@@ -162,10 +174,25 @@ def train_one_epoch(
             # DRE metrics extraction
             if hasattr(outputs, 'get') and outputs.get('routing_info'):
                 routing_info = outputs['routing_info']
+                # Current-step routing info
+                if isinstance(routing_info, dict):
+                    if 'path' in routing_info:
+                        dre_metrics['path_now'] = routing_info['path']
+                    if 'complexity_score' in routing_info:
+                        try:
+                            dre_metrics['comp_now'] = float(routing_info['complexity_score'])
+                        except Exception:
+                            pass
+                    if 'confidence' in routing_info:
+                        try:
+                            dre_metrics['conf_now'] = float(routing_info['confidence'])
+                        except Exception:
+                            pass
+                # Aggregated DRE metrics
                 if 'dre_metrics' in routing_info:
                     dre_info = routing_info['dre_metrics']
                     
-                    # Key DRE metrics for console display
+                    # Key DRE metrics for console display (averages)
                     if 'avg_complexity' in dre_info:
                         dre_metrics['complexity'] = dre_info['avg_complexity']
                     if 'avg_confidence' in dre_info:
@@ -230,12 +257,19 @@ def train_one_epoch(
             dre_str = ""
             if dre_metrics:
                 dre_parts = []
-                if 'complexity' in dre_metrics:
-                    dre_parts.append(f"comp={dre_metrics['complexity']:.2f}")
-                if 'confidence' in dre_metrics:
-                    dre_parts.append(f"conf={dre_metrics['confidence']:.2f}")
-                if 'main_path' in dre_metrics:
-                    dre_parts.append(f"path={dre_metrics['main_path']}")
+                # Prefer current-step metrics when available
+                if 'comp_now' in dre_metrics:
+                    dre_parts.append(f"comp={dre_metrics['comp_now']:.2f}")
+                elif 'complexity' in dre_metrics:
+                    dre_parts.append(f"comp_avg={dre_metrics['complexity']:.2f}")
+                if 'conf_now' in dre_metrics:
+                    dre_parts.append(f"conf={dre_metrics['conf_now']:.2f}")
+                elif 'confidence' in dre_metrics:
+                    dre_parts.append(f"conf_avg={dre_metrics['confidence']:.2f}")
+                if 'path_now' in dre_metrics:
+                    dre_parts.append(f"path={dre_metrics['path_now']}")
+                elif 'main_path' in dre_metrics:
+                    dre_parts.append(f"path_avg={dre_metrics['main_path']}")
                 if dre_parts:
                     dre_str = f" dre=[{','.join(dre_parts)}]"
             

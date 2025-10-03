@@ -33,7 +33,7 @@ class UltraThinkConfig:
     
     # Dynamic reasoning
     enable_dre: bool = True
-    dre_paths: List[str] = field(default_factory=lambda: ["fast", "standard", "deep", "ultra_deep"])
+    dre_paths: List[str] = field(default_factory=lambda: ["fast", "standard", "expert", "deep", "ultra_deep"])
     adaptive_routing: bool = True
     
     # Constitutional AI
@@ -210,11 +210,17 @@ class UltraThinkCore(nn.Module):
                 # Extract text for complexity analysis (simplified)
                 text = kwargs.get('text', '')
                 
-                # DRE forward pass
+                # DRE forward pass (normalize reasoning_path override if provided)
+                rpath = kwargs.get('reasoning_path')
+                if isinstance(rpath, str):
+                    try:
+                        rpath = ReasoningPath[rpath.upper()]
+                    except Exception:
+                        rpath = None
                 dre_outputs = self.dre(
                     input_ids=input_ids,
                     text=text,
-                    override_path=kwargs.get('reasoning_path'),
+                    override_path=rpath,
                     attention_mask=attention_mask,
                     labels=labels
                 )
@@ -243,8 +249,15 @@ class UltraThinkCore(nn.Module):
             total_aux_loss = 0
             moe_info = {}
             
-            # Apply MoE layers only if available
-            if self.moe_layers is not None:
+            # Apply MoE layers based on DRE routing decision
+            use_moe_now = (self.moe_layers is not None)
+            if isinstance(routing_info, dict) and 'use_moe' in routing_info:
+                use_moe_now = use_moe_now and bool(routing_info['use_moe'])
+            # Persist final decision for logging/UI
+            if isinstance(routing_info, dict):
+                routing_info['used_moe'] = bool(use_moe_now)
+
+            if use_moe_now:
                 for layer_idx_str, moe_layer in self.moe_layers.items():
                     layer_idx = int(layer_idx_str)
                     
@@ -324,6 +337,14 @@ class UltraThinkCore(nn.Module):
             
             if constitutional_info and 'constitutional_loss' in constitutional_info:
                 loss = loss + self.config.constitutional_weight * constitutional_info['constitutional_loss']
+
+            # Include DRE auxiliary loss if available (enables router learning)
+            try:
+                if isinstance(base_outputs, dict) and ('dre_aux_loss' in base_outputs) and (base_outputs['dre_aux_loss'] is not None):
+                    dre_aux_w = getattr(self.config, 'dre_aux_weight', 0.05)
+                    loss = loss + dre_aux_w * base_outputs['dre_aux_loss']
+            except Exception:
+                pass
         
         if not return_dict:
             return logits
