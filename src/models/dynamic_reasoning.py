@@ -449,6 +449,7 @@ class DynamicReasoningEngine(nn.Module):
         
         # Override if specified
         if override_path:
+            logger.info(f"DRE: Using override path={override_path.value}")
             return RoutingDecision(
                 path=override_path,
                 confidence=1.0,
