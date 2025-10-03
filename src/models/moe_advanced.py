@@ -65,17 +65,23 @@ class NoisyTopKRouter(nn.Module):
         noise_std: float = 1.0
     ):
         super().__init__()
-        
         self.hidden_dim = hidden_dim
         self.num_experts = num_experts
         self.top_k = top_k
         self.noise_std = noise_std
         
-        # Router network - use float32 for stability
+        # Router network - use float32
+        # Router gate with proper initialization
         self.gate = nn.Linear(hidden_dim, num_experts, bias=False, dtype=torch.float32)
+        # Initialize with small uniform weights to encourage balanced routing
+        with torch.no_grad():
+            self.gate.weight.uniform_(-0.01, 0.01)
         
         # Learnable noise parameters
         self.noise_linear = nn.Linear(hidden_dim, num_experts, dtype=torch.float32)
+        # Initialize noise layer with small weights
+        with torch.no_grad():
+            self.noise_linear.weight.uniform_(-0.005, 0.005)  # Even smaller for noise
         
     @torchdynamo_disable
     def forward(
@@ -107,6 +113,12 @@ class NoisyTopKRouter(nn.Module):
                 noise_logits = self.noise_linear(hs_fp32)
                 noise = torch.randn_like(logits) * F.softplus(noise_logits)
                 logits = logits + noise * self.noise_std
+            
+            # Add temperature scaling for better exploration during early training
+            if training:
+                # Use temperature=2.0 to make routing more uniform initially
+                temperature = 2.0
+                logits = logits / temperature
 
             # Softmax/topk in fp32
             scores = F.softmax(logits, dim=-1)
