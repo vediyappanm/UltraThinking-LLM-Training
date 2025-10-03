@@ -110,26 +110,29 @@ class NoisyTopKRouter(nn.Module):
 
             # Softmax/topk in fp32
             scores = F.softmax(logits, dim=-1)
-            top_k_scores, top_k_indices = torch.topk(scores, self.top_k, dim=-1)
+            
+            # Top-k selection (ensure k doesn't exceed number of experts)
+            actual_top_k = min(self.top_k, self.num_experts)
+            top_k_scores, top_k_indices = torch.topk(scores, actual_top_k, dim=-1)
 
             # Renormalize and cast back to original dtype for downstream use
             top_k_scores = top_k_scores / top_k_scores.sum(dim=-1, keepdim=True)
             top_k_scores = top_k_scores.to(original_dtype)
         
-        # Create dispatch mask [B*S, E, K]
+        # Create dispatch mask [B*S, E, K] - use actual_top_k
         dispatch_mask = torch.zeros(
-            batch_size * seq_len, self.num_experts, self.top_k,
+            batch_size * seq_len, self.num_experts, actual_top_k,
             dtype=torch.bool, device=hidden_states.device
         )
         
-        # Create combine weights [B*S, E, K]
+        # Create combine weights [B*S, E, K] - use actual_top_k
         combine_weights = torch.zeros(
-            batch_size * seq_len, self.num_experts, self.top_k,
+            batch_size * seq_len, self.num_experts, actual_top_k,
             dtype=hidden_states.dtype, device=hidden_states.device
         )
         
         # Fill dispatch mask and weights
-        for k in range(self.top_k):
+        for k in range(actual_top_k):
             expert_idx = top_k_indices[:, k]  # [B*S]
             dispatch_mask[torch.arange(batch_size * seq_len), expert_idx, k] = True
             combine_weights[torch.arange(batch_size * seq_len), expert_idx, k] = top_k_scores[:, k]
@@ -138,8 +141,8 @@ class NoisyTopKRouter(nn.Module):
         aux_losses = self._compute_aux_losses(scores, dispatch_mask)
         
         # Reshape back
-        dispatch_mask = dispatch_mask.view(batch_size, seq_len, self.num_experts, self.top_k)
-        combine_weights = combine_weights.view(batch_size, seq_len, self.num_experts, self.top_k)
+        dispatch_mask = dispatch_mask.view(batch_size, seq_len, self.num_experts, actual_top_k)
+        combine_weights = combine_weights.view(batch_size, seq_len, self.num_experts, actual_top_k)
         
         return dispatch_mask, combine_weights, aux_losses
     
