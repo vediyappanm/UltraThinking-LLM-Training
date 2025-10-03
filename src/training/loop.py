@@ -59,43 +59,50 @@ def train_one_epoch(
                     loss = outputs["loss"]
             else:
                 outputs = model(**batch, use_dre=use_dre_now)
-                loss = outputs["loss"]
-
             loss = loss / args.gradient_accumulation_steps
+            
+            # Skip if loss is not finite
             if not torch.isfinite(loss):
                 if optimizer is not None:
                     optimizer.zero_grad(set_to_none=True)
                 continue
-
+                
+            # Backward pass
             if scaler is not None:
                 scaler.scale(loss).backward()
             else:
                 loss.backward()
-
+            
+            # CRITICAL FIX: Add gradient norm logging for debugging
+            total_grad_norm = 0.0
+            router_grad_norm = 0.0
+            if global_step % 5 == 0:  # Log every 5 steps
+                for name, param in model.named_parameters():
+                    if param.grad is not None:
+                        param_norm = param.grad.data.norm(2)
+                        total_grad_norm += param_norm.item() ** 2
+                        if 'gate' in name or 'router' in name:
+                            router_grad_norm += param_norm.item() ** 2
+                total_grad_norm = total_grad_norm ** (1. / 2)
+                router_grad_norm = router_grad_norm ** (1. / 2)
+            
+            # Gradient clipping and optimizer step
             if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
-                if args.gradient_clipping > 0 and optimizer is not None:
-                    if scaler is not None:
-                        scaler.unscale_(optimizer)
-                    params_for_norm = model.parameters() if not _is_deepspeed_engine(model) else model.module.parameters()
-                    total_norm = torch.nn.utils.clip_grad_norm_(
-                        params_for_norm,
-                        args.gradient_clipping,
-                    )
-                    if getattr(args, "log_grad_norm", False) and is_main_process:
-                        try:
-                            gnorm = float(total_norm.detach().cpu())
-                        except Exception:
-                            gnorm = float(total_norm)
-                        print(f"[perf] step={global_step} grad_norm={gnorm:.4f}")
-                        grad_norms.append(gnorm)
                 if optimizer is not None:
+                    # Gradient clipping
+                    if args.gradient_clipping > 0:
+                        if scaler is not None:
+                            scaler.unscale_(optimizer)
+                        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.gradient_clipping)
+                    
+                    # Optimizer step
                     if scaler is not None:
                         scaler.step(optimizer)
                         scaler.update()
                     else:
                         optimizer.step()
                     scheduler.step()
-                    optimizer.zero_grad()
+                    optimizer.zero_grad(set_to_none=True)
                 global_step += 1
 
         total_loss += float(loss.detach())
@@ -211,7 +218,15 @@ def train_one_epoch(
                 if dre_parts:
                     dre_str = f" dre=[{','.join(dre_parts)}]"
             
-            print(f"[step] step={global_step} loss={step_loss:.4f} ppl={perplexity:.2f} toks/s={toks_per_sec:.1f}{moe_str}{dre_str}")
+            # Add gradient norm to output if available
+            grad_str = ""
+            if 'total_grad_norm' in locals() and total_grad_norm > 0:
+                grad_str = f" grad=[total={total_grad_norm:.3f}"
+                if router_grad_norm > 0:
+                    grad_str += f",router={router_grad_norm:.3f}"
+                grad_str += "]"
+            
+            print(f"[step] step={global_step} loss={step_loss:.4f} ppl={perplexity:.2f} toks/s={toks_per_sec:.1f}{moe_str}{dre_str}{grad_str}")
             
             # Log to MLflow if available and enabled
             if MLFLOW_AVAILABLE and getattr(args, "use_mlflow", False):

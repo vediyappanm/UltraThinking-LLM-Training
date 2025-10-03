@@ -396,20 +396,23 @@ def create_dataloader(dataset: Dataset,
                      shuffle: bool = True,
                      num_workers: int = 0,
                      pin_memory: bool = False) -> DataLoader:
-    """Create a DataLoader from dataset"""
+    """Create a DataLoader with optimized settings"""
+    # CRITICAL FIX: Optimize data loading with more workers and persistent workers
+    optimal_workers = min(num_workers * 2, 6)  # 2x workers, max 6
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
-        num_workers=num_workers,
+        num_workers=optimal_workers,
         pin_memory=pin_memory,
-        drop_last=True  # Drop incomplete batches
+        drop_last=True,
+        persistent_workers=True if optimal_workers > 0 else False,
+        prefetch_factor=4 if optimal_workers > 0 else None
     )
 
 # Example usage and dataset information
 DATASET_INFO = {
     "wikitext": {
-        "description": "WikiText language modeling dataset",
         "size": "~100MB (wikitext-2), ~500MB (wikitext-103)",
         "language": "English",
         "domain": "Wikipedia articles",

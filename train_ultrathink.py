@@ -449,13 +449,18 @@ class UltraThinkTrainer:
         train_sampler = DistributedSampler(train_dataset) if is_dist else None
         val_sampler = DistributedSampler(val_dataset) if is_dist else None
         
+        # CRITICAL FIX: Optimize data loading with more workers and persistent workers
+        optimal_workers = min(self.args.num_workers * 2, 6)  # 2x workers, max 6
         self.train_loader = DataLoader(
             train_dataset,
             batch_size=self.args.batch_size,
             sampler=train_sampler,
             shuffle=(train_sampler is None),
-            num_workers=0,  # Windows compatibility; tune on Linux
-            pin_memory=False  # Disable pin_memory on CPU
+            num_workers=optimal_workers,
+            pin_memory=False,  # Disable pin_memory on CPU
+            persistent_workers=True if optimal_workers > 0 else False,
+            prefetch_factor=4 if optimal_workers > 0 else None,
+            drop_last=True
         )
         
         self.val_loader = DataLoader(
