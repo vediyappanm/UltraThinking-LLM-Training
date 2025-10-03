@@ -206,7 +206,10 @@ class UltraThinkTrainer:
             num_meta_experts=self.args.num_meta_experts,
             num_safety_experts=self.args.num_safety_experts,
             top_k=self.args.moe_top_k,
-            expert_capacity=self.args.expert_capacity
+            expert_capacity=self.args.expert_capacity,
+            load_balance_weight=self.args.load_balance_weight,
+            z_loss_weight=self.args.z_loss_weight,
+            importance_weight=self.args.importance_weight
         )
         
         # Multi-modal config
@@ -802,6 +805,11 @@ def parse_args():
     parser.add_argument('--num_safety_experts', type=int, default=8)
     parser.add_argument('--moe_top_k', type=int, default=2)
     parser.add_argument('--expert_capacity', type=float, default=1.25)
+    
+    # Load balancing loss weights
+    parser.add_argument('--load_balance_weight', type=float, default=0.01, help='Weight for load balancing loss')
+    parser.add_argument('--z_loss_weight', type=float, default=0.001, help='Weight for router logit regularization')
+    parser.add_argument('--importance_weight', type=float, default=0.01, help='Weight for routing diversity loss')
     
     # Multi-modal settings
     parser.add_argument('--enable_multimodal', action='store_true')

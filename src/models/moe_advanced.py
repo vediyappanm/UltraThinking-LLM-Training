@@ -40,8 +40,13 @@ class ExpertConfig:
     num_safety_experts: int = 8
     expert_capacity: float = 1.25  # Capacity factor for load balancing
     expert_dropout: float = 0.1
-    aux_loss_weight: float = 0.01
-    z_loss_weight: float = 0.001
+    
+    # Load balancing loss weights (Switch Transformers approach)
+    load_balance_weight: float = 0.01  # Primary load balancing loss
+    z_loss_weight: float = 0.001  # Router logit regularization
+    importance_weight: float = 0.01  # Routing diversity loss
+    aux_loss_weight: float = 0.01  # Legacy - kept for compatibility
+    
     top_k: int = 2  # Number of experts to route to
     moe_dtype: torch.dtype = torch.float32
     expert_parallelism: bool = True
@@ -171,7 +176,9 @@ class NoisyTopKRouter(nn.Module):
         return {
             'load_loss': load_loss,
             'importance_loss': importance_loss,
-            'z_loss': z_loss
+            'z_loss': z_loss,
+            'expert_usage': expert_usage,
+            'routing_entropy': -torch.sum(expert_usage * torch.log(expert_usage + 1e-10))
         }
 
 
@@ -474,6 +481,32 @@ class HierarchicalMoE(nn.Module):
         # Add residual connection
         final_output = hidden_states + final_output
         
+        # Calculate expert utilization metrics
+        expert_utilization = {}
+        total_routing_entropy = 0.0
+        
+        for expert_type in ['knowledge', 'skill', 'meta', 'safety']:
+            if f"{expert_type}_expert_usage" in all_aux_losses:
+                usage = all_aux_losses[f"{expert_type}_expert_usage"]
+                entropy = all_aux_losses[f"{expert_type}_routing_entropy"]
+                
+                # Per-expert utilization percentages
+                expert_utilization[f"{expert_type}_usage_pct"] = (usage * 100).tolist()
+                
+                # Load variance (how balanced the routing is)
+                expert_utilization[f"{expert_type}_load_variance"] = float(torch.var(usage))
+                
+                # Top expert concentration (what % goes to most used expert)
+                expert_utilization[f"{expert_type}_top_expert_pct"] = float(torch.max(usage) * 100)
+                
+                # Routing entropy (higher = more balanced)
+                expert_utilization[f"{expert_type}_entropy"] = float(entropy)
+                total_routing_entropy += entropy
+        
+        # Overall MoE health metrics
+        expert_utilization['total_routing_entropy'] = float(total_routing_entropy)
+        expert_utilization['avg_routing_entropy'] = float(total_routing_entropy / 4)  # 4 expert types
+        
         # Prepare info dictionary
         info = {
             'aux_losses': all_aux_losses,
@@ -483,14 +516,14 @@ class HierarchicalMoE(nn.Module):
                 'skill': self.config.num_skill_experts,
                 'meta': self.config.num_meta_experts,
                 'safety': self.config.num_safety_experts
-            }
+            },
+            'expert_utilization': expert_utilization
         }
         
         return final_output, info
 
 
 class MoELayer(nn.Module):
-    """Complete MoE layer with hierarchical experts"""
     
     def __init__(
         self,
@@ -538,17 +571,24 @@ class MoELayer(nn.Module):
         if return_aux_loss and moe_info.get('aux_losses'):
             aux_losses = moe_info['aux_losses']
             
-            # Combine all auxiliary losses
+            # Combine all auxiliary losses with proper weighting
             total_aux_loss = torch.tensor(0.0, device=hidden_states.device)
             
-            # Load balancing losses
+            # Load balancing losses (Switch Transformers approach)
+            load_balance_weight = getattr(self.config, 'load_balance_weight', 0.01)
+            z_loss_weight = getattr(self.config, 'z_loss_weight', 0.001)
+            importance_weight = getattr(self.config, 'importance_weight', 0.01)
+            
             for key, loss in aux_losses.items():
                 if 'load_loss' in key:
-                    total_aux_loss += self.config.aux_loss_weight * loss
+                    # Primary load balancing loss - encourages uniform expert usage
+                    total_aux_loss += load_balance_weight * loss
                 elif 'z_loss' in key:
-                    total_aux_loss += self.config.z_loss_weight * loss
+                    # Z-loss - prevents router logits from becoming too large
+                    total_aux_loss += z_loss_weight * loss
                 elif 'importance_loss' in key:
-                    total_aux_loss += self.config.aux_loss_weight * 0.5 * loss
+                    # Importance loss - encourages diversity in routing decisions
+                    total_aux_loss += importance_weight * loss
             
             aux_loss = total_aux_loss
         

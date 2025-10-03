@@ -126,18 +126,81 @@ def train_one_epoch(
             step_time = time.time() - step_start
             toks_per_sec = toks / step_time if step_time > 0 and toks > 0 else 0.0
             
-            # Log loss, perplexity, and throughput to console
-            print(f"[step] step={global_step} loss={step_loss:.4f} ppl={perplexity:.2f} toks/s={toks_per_sec:.1f}")
+            # Extract MoE utilization metrics and auxiliary losses if available
+            moe_metrics = {}
+            aux_loss_value = 0.0
+            
+            if hasattr(outputs, 'get') and outputs.get('moe_info'):
+                moe_info = outputs['moe_info']
+                
+                # Expert utilization metrics
+                if 'expert_utilization' in moe_info:
+                    util = moe_info['expert_utilization']
+                    
+                    # Key metrics for console display
+                    if 'avg_routing_entropy' in util:
+                        moe_metrics['entropy'] = util['avg_routing_entropy']
+                    
+                    # Check for expert collapse (top expert getting >80% of traffic)
+                    max_concentration = 0
+                    for expert_type in ['knowledge', 'skill', 'meta', 'safety']:
+                        key = f"{expert_type}_top_expert_pct"
+                        if key in util:
+                            max_concentration = max(max_concentration, util[key])
+                    
+                    if max_concentration > 0:
+                        moe_metrics['max_expert_pct'] = max_concentration
+                
+                # Auxiliary loss metrics
+                if 'aux_losses' in moe_info:
+                    aux_losses = moe_info['aux_losses']
+                    total_aux = 0.0
+                    for key, loss_val in aux_losses.items():
+                        if isinstance(loss_val, torch.Tensor):
+                            total_aux += float(loss_val.detach())
+                    aux_loss_value = total_aux
+                    moe_metrics['aux_loss'] = aux_loss_value
+            
+            # Log loss, perplexity, throughput, and MoE metrics to console
+            moe_str = ""
+            if moe_metrics:
+                moe_parts = []
+                if 'entropy' in moe_metrics:
+                    moe_parts.append(f"entropy={moe_metrics['entropy']:.2f}")
+                if 'max_expert_pct' in moe_metrics:
+                    moe_parts.append(f"max_exp={moe_metrics['max_expert_pct']:.1f}%")
+                if 'aux_loss' in moe_metrics and moe_metrics['aux_loss'] > 0:
+                    moe_parts.append(f"aux={moe_metrics['aux_loss']:.4f}")
+                if moe_parts:
+                    moe_str = f" moe=[{','.join(moe_parts)}]"
+            
+            print(f"[step] step={global_step} loss={step_loss:.4f} ppl={perplexity:.2f} toks/s={toks_per_sec:.1f}{moe_str}")
             
             # Log to MLflow if available and enabled
             if MLFLOW_AVAILABLE and getattr(args, "use_mlflow", False):
                 try:
-                    mlflow.log_metrics({
+                    metrics = {
                         'train/step_loss': step_loss,
                         'train/step_perplexity': perplexity if perplexity != float('inf') else 1e10,
                         'train/tokens_per_sec': toks_per_sec,
                         'train/learning_rate': float(scheduler.get_last_lr()[0]) if scheduler is not None else 0.0,
-                    }, step=global_step)
+                    }
+                    
+                    # Add detailed MoE metrics to MLflow
+                    if hasattr(outputs, 'get') and outputs.get('moe_info'):
+                        moe_info = outputs['moe_info']
+                        if 'expert_utilization' in moe_info:
+                            util = moe_info['expert_utilization']
+                            
+                            # Log all expert utilization metrics
+                            for key, value in util.items():
+                                if isinstance(value, (int, float)):
+                                    metrics[f'moe/{key}'] = value
+                                elif isinstance(value, list) and len(value) <= 10:  # Avoid logging huge lists
+                                    for i, v in enumerate(value):
+                                        metrics[f'moe/{key}_expert_{i}'] = v
+                    
+                    mlflow.log_metrics(metrics, step=global_step)
                 except Exception as e:
                     pass  # Silent fail for MLflow logging
         last_step_time = time.time()
