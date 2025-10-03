@@ -38,10 +38,13 @@ def train_one_epoch(
 
     start_time = time.time()
     last_step_time = time.time()
+    
+    print(f"[DEBUG] Starting training loop, train_loader length estimate: {len(train_loader) if hasattr(train_loader, '__len__') else 'unknown'}")
+    print(f"[DEBUG] gradient_accumulation_steps: {args.gradient_accumulation_steps}")
+    
     for batch_idx, batch in enumerate(train_loader):
-        # DEBUG: Print every batch to see if loop is running
-        if batch_idx % 10 == 0:
-            print(f"[DEBUG] Processing batch {batch_idx}, global_step={global_step}")
+        # DEBUG: Print EVERY batch to see loop execution
+        print(f"[DEBUG] Batch {batch_idx}: global_step={global_step}")
         
         batch = {k: v.to(device) for k, v in batch.items()}
         step_start = time.time()
@@ -125,6 +128,8 @@ def train_one_epoch(
 
         # ALWAYS LOG after each gradient accumulation step (simplified condition)
         should_log = (batch_idx + 1) % args.gradient_accumulation_steps == 0
+        print(f"[DEBUG] After batch {batch_idx}: (batch_idx+1)={batch_idx+1}, grad_accum={args.gradient_accumulation_steps}, should_log={should_log}")
+        
         if should_log:
             # Calculate current step loss (unscaled for gradient accumulation)
             step_loss = float(loss.detach()) * args.gradient_accumulation_steps
