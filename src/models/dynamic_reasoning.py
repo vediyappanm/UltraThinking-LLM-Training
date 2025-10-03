@@ -583,10 +583,17 @@ class DynamicReasoningEngine(nn.Module):
         
         # Execute selected path
         if routing_decision.path == ReasoningPath.FAST:
-            output = self._fast_inference(input_ids, **kwargs)
-            # Convert to standard format if needed
-            if not isinstance(output, dict):
-                output = {'logits': output}
+            # Training needs valid loss/hidden_states. If labels are provided (training),
+            # run standard inference to produce full outputs while keeping FAST in routing_info for logging.
+            train_needs_loss = self.training and (kwargs.get('labels', None) is not None)
+            if train_needs_loss:
+                logger.info("DRE: FAST path selected, switching to STANDARD inference for training loss")
+                output = self._standard_inference(input_ids, **kwargs)
+            else:
+                output = self._fast_inference(input_ids, **kwargs)
+                # Convert to standard format if needed
+                if not isinstance(output, dict):
+                    output = {'logits': output}
                 
         elif routing_decision.path == ReasoningPath.STANDARD:
             output = self._standard_inference(input_ids, **kwargs)
