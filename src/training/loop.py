@@ -116,7 +116,8 @@ def train_one_epoch(
                 print(f"[mem] step={global_step} alloc_mb={mem_alloc:.1f} reserved_mb={mem_res:.1f}")
 
         # Loss and performance logging per interval (log after each gradient accumulation step)
-        if (batch_idx + 1) % args.gradient_accumulation_steps == 0 and is_main_process:
+        should_log = (batch_idx + 1) % args.gradient_accumulation_steps == 0
+        if should_log and is_main_process:
             # Calculate current step loss (unscaled for gradient accumulation)
             step_loss = float(loss.detach()) * args.gradient_accumulation_steps
             try:
@@ -137,6 +138,10 @@ def train_one_epoch(
             moe_metrics = {}
             dre_metrics = {}
             aux_loss_value = 0.0
+            
+            # DEBUG: Print what we have in outputs
+            if hasattr(outputs, 'keys'):
+                print(f"[DEBUG] outputs keys: {list(outputs.keys())}")
             
             # DRE metrics extraction
             if hasattr(outputs, 'get') and outputs.get('routing_info'):
