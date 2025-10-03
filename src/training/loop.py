@@ -126,9 +126,30 @@ def train_one_epoch(
             step_time = time.time() - step_start
             toks_per_sec = toks / step_time if step_time > 0 and toks > 0 else 0.0
             
-            # Extract MoE utilization metrics and auxiliary losses if available
+            # Extract MoE utilization metrics, auxiliary losses, and DRE metrics if available
             moe_metrics = {}
+            dre_metrics = {}
             aux_loss_value = 0.0
+            
+            # DRE metrics extraction
+            if hasattr(outputs, 'get') and outputs.get('routing_info'):
+                routing_info = outputs['routing_info']
+                if 'dre_metrics' in routing_info:
+                    dre_info = routing_info['dre_metrics']
+                    
+                    # Key DRE metrics for console display
+                    if 'avg_complexity' in dre_info:
+                        dre_metrics['complexity'] = dre_info['avg_complexity']
+                    if 'avg_confidence' in dre_info:
+                        dre_metrics['confidence'] = dre_info['avg_confidence']
+                    if 'path_distribution' in dre_info:
+                        # Find most used path
+                        path_dist = dre_info['path_distribution']
+                        if path_dist:
+                            most_used_path = max(path_dist.items(), key=lambda x: x[1])
+                            dre_metrics['main_path'] = f"{most_used_path[0]}({most_used_path[1]:.0f}%)"
+                    if 'cache_hit_rate' in dre_info:
+                        dre_metrics['cache_hit'] = dre_info['cache_hit_rate']
             
             if hasattr(outputs, 'get') and outputs.get('moe_info'):
                 moe_info = outputs['moe_info']
@@ -165,7 +186,7 @@ def train_one_epoch(
                     aux_loss_value = total_aux
                     moe_metrics['aux_loss'] = aux_loss_value
             
-            # Log loss, perplexity, throughput, and MoE metrics to console
+            # Log loss, perplexity, throughput, MoE and DRE metrics to console
             moe_str = ""
             if moe_metrics:
                 moe_parts = []
@@ -178,7 +199,19 @@ def train_one_epoch(
                 if moe_parts:
                     moe_str = f" moe=[{','.join(moe_parts)}]"
             
-            print(f"[step] step={global_step} loss={step_loss:.4f} ppl={perplexity:.2f} toks/s={toks_per_sec:.1f}{moe_str}")
+            dre_str = ""
+            if dre_metrics:
+                dre_parts = []
+                if 'complexity' in dre_metrics:
+                    dre_parts.append(f"comp={dre_metrics['complexity']:.2f}")
+                if 'confidence' in dre_metrics:
+                    dre_parts.append(f"conf={dre_metrics['confidence']:.2f}")
+                if 'main_path' in dre_metrics:
+                    dre_parts.append(f"path={dre_metrics['main_path']}")
+                if dre_parts:
+                    dre_str = f" dre=[{','.join(dre_parts)}]"
+            
+            print(f"[step] step={global_step} loss={step_loss:.4f} ppl={perplexity:.2f} toks/s={toks_per_sec:.1f}{moe_str}{dre_str}")
             
             # Log to MLflow if available and enabled
             if MLFLOW_AVAILABLE and getattr(args, "use_mlflow", False):
@@ -203,6 +236,21 @@ def train_one_epoch(
                                 elif isinstance(value, list) and len(value) <= 10:  # Avoid logging huge lists
                                     for i, v in enumerate(value):
                                         metrics[f'moe/{key}_expert_{i}'] = v
+                    
+                    # Add detailed DRE metrics to MLflow
+                    if hasattr(outputs, 'get') and outputs.get('routing_info'):
+                        routing_info = outputs['routing_info']
+                        if 'dre_metrics' in routing_info:
+                            dre_info = routing_info['dre_metrics']
+                            
+                            # Log all DRE metrics
+                            for key, value in dre_info.items():
+                                if isinstance(value, (int, float)):
+                                    metrics[f'dre/{key}'] = value
+                                elif isinstance(value, dict):
+                                    # Log path distribution
+                                    for path_name, path_pct in value.items():
+                                        metrics[f'dre/path_{path_name}'] = path_pct
                     
                     mlflow.log_metrics(metrics, step=global_step)
                 except Exception as e:

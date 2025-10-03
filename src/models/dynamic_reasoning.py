@@ -261,6 +261,13 @@ class DynamicReasoningEngine(nn.Module):
         # Latency tracking
         self.latency_history = {path: [] for path in ReasoningPath}
         
+        # DRE metrics tracking
+        self.activation_counts = {path: 0 for path in ReasoningPath}
+        self.total_activations = 0
+        self.complexity_scores = []
+        self.confidence_scores = []
+        self.reasoning_steps = []
+    
     def _create_distilled_model(self):
         """Create a smaller distilled version of the base model"""
         # Placeholder - in practice, load a pre-distilled model
@@ -489,6 +496,44 @@ class DynamicReasoningEngine(nn.Module):
         weighted_latency = sum(p * l for p, l in zip(probs[0].detach().to(torch.float32).cpu().numpy(), latencies))
         return weighted_latency
     
+    def get_current_metrics(self) -> Dict[str, Any]:
+        """Get current DRE metrics for logging"""
+        if self.total_activations == 0:
+            return {
+                'activation_rate': 0.0,
+                'avg_complexity': 0.0,
+                'avg_confidence': 0.0,
+                'avg_reasoning_steps': 0.0,
+                'path_distribution': {path.value: 0.0 for path in ReasoningPath}
+            }
+        
+        # Calculate activation rates per path
+        path_distribution = {
+            path.value: self.activation_counts[path] / self.total_activations * 100
+            for path in ReasoningPath
+        }
+        
+        # Calculate averages
+        avg_complexity = float(np.mean(self.complexity_scores[-100:])) if self.complexity_scores else 0.0
+        avg_confidence = float(np.mean(self.confidence_scores[-100:])) if self.confidence_scores else 0.0
+        avg_reasoning_steps = float(np.mean(self.reasoning_steps[-50:])) if self.reasoning_steps else 0.0
+        
+        # Cache efficiency
+        cache_hit_rate = 0.0
+        if self.enable_caching and (self.cache_hits + self.cache_misses) > 0:
+            cache_hit_rate = self.cache_hits / (self.cache_hits + self.cache_misses) * 100
+        
+        return {
+            'activation_rate': self.total_activations,
+            'avg_complexity': avg_complexity,
+            'avg_confidence': avg_confidence,
+            'avg_reasoning_steps': avg_reasoning_steps,
+            'path_distribution': path_distribution,
+            'cache_hit_rate': cache_hit_rate,
+            'total_cache_hits': self.cache_hits,
+            'total_cache_misses': self.cache_misses
+        }
+    
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -527,13 +572,25 @@ class DynamicReasoningEngine(nn.Module):
         latency_ms = (time.time() - start_time) * 1000
         self.latency_history[routing_decision.path].append(latency_ms)
         
+        # Update DRE metrics
+        self.activation_counts[routing_decision.path] += 1
+        self.total_activations += 1
+        self.complexity_scores.append(routing_decision.complexity_score)
+        self.confidence_scores.append(routing_decision.confidence)
+        
+        # Track reasoning steps for deep paths
+        if routing_decision.path in [ReasoningPath.DEEP, ReasoningPath.ULTRA_DEEP]:
+            steps = routing_decision.debug_info.get('reasoning_steps', 1)
+            self.reasoning_steps.append(steps)
+        
         # Add routing info to output
         output['routing_info'] = {
             'path': routing_decision.path.value,
             'complexity_score': routing_decision.complexity_score,
             'confidence': routing_decision.confidence,
             'latency_ms': latency_ms,
-            'debug': routing_decision.debug_info
+            'debug': routing_decision.debug_info,
+            'dre_metrics': self.get_current_metrics()
         }
         
         # Avoid issues with torch.compile/torch._dynamo tracing Python f-strings and time
