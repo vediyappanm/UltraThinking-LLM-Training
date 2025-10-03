@@ -507,6 +507,7 @@ class DynamicReasoningEngine(nn.Module):
         latency_ranges = {
             ReasoningPath.FAST: (10, 100),
             ReasoningPath.STANDARD: (1000, 5000),
+            ReasoningPath.EXPERT: (3000, 10000),  # MoE experts - slower than standard, faster than deep
             ReasoningPath.DEEP: (10000, 60000),
             ReasoningPath.ULTRA_DEEP: (60000, 300000)
         }
