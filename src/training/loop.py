@@ -35,6 +35,10 @@ def train_one_epoch(
     start_time = time.time()
     last_step_time = time.time()
     for batch_idx, batch in enumerate(train_loader):
+        # DEBUG: Print every batch to see if loop is running
+        if batch_idx % 10 == 0:
+            print(f"[DEBUG] Processing batch {batch_idx}, global_step={global_step}")
+        
         batch = {k: v.to(device) for k, v in batch.items()}
         step_start = time.time()
 
