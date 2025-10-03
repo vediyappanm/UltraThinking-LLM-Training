@@ -494,7 +494,10 @@ class HierarchicalMoE(nn.Module):
                 expert_utilization[f"{expert_type}_usage_pct"] = (usage * 100).tolist()
                 
                 # Load variance (how balanced the routing is)
-                expert_utilization[f"{expert_type}_load_variance"] = float(torch.var(usage))
+                if usage.numel() > 1:
+                    expert_utilization[f"{expert_type}_load_variance"] = float(torch.var(usage, unbiased=False))
+                else:
+                    expert_utilization[f"{expert_type}_load_variance"] = 0.0
                 
                 # Top expert concentration (what % goes to most used expert)
                 expert_utilization[f"{expert_type}_top_expert_pct"] = float(torch.max(usage) * 100)

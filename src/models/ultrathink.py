@@ -241,6 +241,8 @@ class UltraThinkCore(nn.Module):
                     'note': 'dre_unavailable_or_no_routing_info'
                 }
             total_aux_loss = 0
+            moe_info = {}
+            
             # Apply MoE layers only if available
             if self.moe_layers is not None:
                 for layer_idx_str, moe_layer in self.moe_layers.items():
@@ -253,6 +255,16 @@ class UltraThinkCore(nn.Module):
                         
                         if aux_loss is not None:
                             total_aux_loss += aux_loss
+                        
+                        # Collect MoE info if available
+                        if hasattr(moe_layer, 'moe') and hasattr(moe_layer.moe, 'forward'):
+                            try:
+                                # Get MoE info from the layer
+                                _, layer_moe_info = moe_layer.moe(hidden_states, return_all_levels=True)
+                                if layer_moe_info and 'expert_utilization' in layer_moe_info:
+                                    moe_info = layer_moe_info  # Use the latest layer's info
+                            except Exception:
+                                pass  # Skip if MoE info extraction fails
         
         # Constitutional safety check (only if CRC is available)
         if enforce_safety and (self.crc is not None) and hidden_states is not None:
@@ -334,6 +346,8 @@ class UltraThinkCore(nn.Module):
         
         if self.moe_layers:
             outputs['moe_aux_loss'] = total_aux_loss if 'total_aux_loss' in locals() else None
+            if 'moe_info' in locals() and moe_info:
+                outputs['moe_info'] = moe_info
         
         return outputs
 
