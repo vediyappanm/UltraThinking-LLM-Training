@@ -210,19 +210,34 @@ class UltraThinkCore(nn.Module):
                 # Extract text for complexity analysis (simplified)
                 text = kwargs.get('text', '')
                 
-                # DRE forward pass (normalize reasoning_path override if provided)
-                rpath = kwargs.get('reasoning_path')
-                if isinstance(rpath, str):
-                    try:
-                        rpath = ReasoningPath[rpath.upper()]
-                        logger.info(f"[DEBUG] UltraThinkCore: normalized reasoning_path '{kwargs.get('reasoning_path')}' -> {rpath}")
-                    except Exception:
-                        rpath = None
-                        logger.info(f"[DEBUG] UltraThinkCore: failed to normalize reasoning_path '{kwargs.get('reasoning_path')}'")
-                elif rpath is not None:
-                    logger.info(f"[DEBUG] UltraThinkCore: reasoning_path already enum: {rpath}")
+                # DRE forward pass with persistent override support
+                # If 'reasoning_path' is provided now, normalize and store for future batches.
+                # If omitted (None), reuse previously stored override if any.
+                raw_rpath = kwargs.get('reasoning_path', None)
+                rpath = None
+                if raw_rpath is not None:
+                    # A new override was provided this call
+                    if isinstance(raw_rpath, str):
+                        try:
+                            rpath = ReasoningPath[raw_rpath.upper()]
+                            logger.info(f"[DEBUG] UltraThinkCore: normalized reasoning_path '{raw_rpath}' -> {rpath}")
+                        except Exception:
+                            rpath = None
+                            logger.info(f"[DEBUG] UltraThinkCore: failed to normalize reasoning_path '{raw_rpath}'")
+                    else:
+                        rpath = raw_rpath
+                        logger.info(f"[DEBUG] UltraThinkCore: reasoning_path already enum: {rpath}")
+                    # Persist valid overrides across subsequent batches
+                    if rpath is not None:
+                        setattr(self, "_force_reasoning_path", rpath)
+                        logger.info(f"[DEBUG] UltraThinkCore: persisted reasoning_path override {rpath}")
                 else:
-                    logger.info(f"[DEBUG] UltraThinkCore: no reasoning_path override (got: {kwargs.get('reasoning_path')})")
+                    # No new override provided; reuse any persisted one
+                    rpath = getattr(self, "_force_reasoning_path", None)
+                    if rpath is not None:
+                        logger.info(f"[DEBUG] UltraThinkCore: reused persisted reasoning_path override {rpath}")
+                    else:
+                        logger.info(f"[DEBUG] UltraThinkCore: no reasoning_path override (got: {raw_rpath})")
                 dre_outputs = self.dre(
                     input_ids=input_ids,
                     text=text,
