@@ -439,20 +439,23 @@ class DynamicReasoningEngine(nn.Module):
         # Extract features
         features = self.complexity_scorer.extract_features(text, input_ids[0])
         
-        # Get complexity score - combine hidden-state signal with features for better variation
+        # Get complexity score - directly inject normalized token entropy to guarantee variance initially
         # Use base embeddings as input signal but DETACH to avoid training the base model from DRE aux loss
         embeddings = self.base_model.embed_tokens(input_ids).detach()
         pooled = embeddings.mean(dim=1)  # [batch, hidden_dim]
         complexity_hidden = self.hidden_complexity_head(pooled).squeeze(-1)  # [batch]
-        complexity_features = self.complexity_scorer(features).squeeze()
-        # Blend signals; if batch, average feature score across batch for stability
-        if isinstance(complexity_features, torch.Tensor) and complexity_features.dim() == 0:
-            complexity_features_tensor = complexity_features
-        else:
-            # Coerce to tensor on the right device/dtype
-            complexity_features_tensor = torch.as_tensor(complexity_features, dtype=complexity_hidden.dtype, device=complexity_hidden.device)
-        # Heavily weight token-entropy features to avoid near-constant scores from the untrained head
-        complexity_score_tensor = 0.2 * complexity_hidden + 0.8 * complexity_features_tensor
+
+        # Normalize token entropy into [0, 1]-ish range. Use log(vocab_size) ~ 10.82 as a scale.
+        try:
+            vocab_size = int(getattr(self.base_model.config, 'vocab_size', 50257))
+        except Exception:
+            vocab_size = 50257
+        entropy_scale = float(np.log(max(2, vocab_size)))
+        entropy_norm = min(max(features.token_entropy / max(1e-6, entropy_scale), 0.0), 1.0)
+        entropy_score = torch.full_like(complexity_hidden, fill_value=float(entropy_norm))
+
+        # Blend signals; strongly favor entropy early to avoid constant scores
+        complexity_score_tensor = 0.2 * complexity_hidden + 0.8 * entropy_score
         complexity_score = float(complexity_score_tensor.mean().detach().cpu().item())
         
         # Get router prediction (allow grads for router so it can learn via aux loss)

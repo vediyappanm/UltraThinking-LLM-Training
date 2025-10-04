@@ -31,7 +31,7 @@ def train_one_epoch(
     is_main_process: bool,
 ) -> Tuple[float, int]:
     model.train()
-    total_loss = 0.0
+    total_raw_loss = 0.0
     num_batches = 0
     grad_norms = []
     
@@ -72,6 +72,7 @@ def train_one_epoch(
             model.step()
         else:
             # AMP path
+            raw_loss_item = None
             if scaler is not None:
                 device_type = "cuda" if torch.cuda.is_available() else "cpu"
                 amp_enabled = True
@@ -84,6 +85,8 @@ def train_one_epoch(
                         reasoning_path=getattr(args, "dre_force_path", None)
                     )
                     loss = outputs["loss"]
+                    # Capture unscaled loss for accurate metrics
+                    raw_loss_item = float(loss.detach())
             else:
                 outputs = model(
                     **batch,
@@ -91,6 +94,7 @@ def train_one_epoch(
                     reasoning_path=getattr(args, "dre_force_path", None)
                 )
                 loss = outputs["loss"]
+                raw_loss_item = float(loss.detach())
             loss = loss / args.gradient_accumulation_steps
             
             # Skip if loss is not finite
@@ -136,7 +140,9 @@ def train_one_epoch(
                     optimizer.zero_grad(set_to_none=True)
                 global_step += 1
 
-        total_loss += float(loss.detach())
+        # Accumulate unscaled (true) loss for epoch metrics
+        if raw_loss_item is not None:
+            total_raw_loss += raw_loss_item
         num_batches += 1
 
         # Optional CUDA memory logging per interval
@@ -146,8 +152,8 @@ def train_one_epoch(
                 mem_res = torch.cuda.memory_reserved() / (1024**2)
                 print(f"[mem] step={global_step} alloc_mb={mem_alloc:.1f} reserved_mb={mem_res:.1f}")
 
-        # ALWAYS LOG after each gradient accumulation step (simplified condition)
-        should_log = (batch_idx + 1) % args.gradient_accumulation_steps == 0
+        # ALWAYS LOG after each gradient accumulation step; also log first micro-batch for verification
+        should_log = ((batch_idx + 1) % args.gradient_accumulation_steps == 0) or (batch_idx == 0)
         print(f"[DEBUG] After batch {batch_idx}: (batch_idx+1)={batch_idx+1}, grad_accum={args.gradient_accumulation_steps}, should_log={should_log}")
         
         if should_log:
@@ -178,6 +184,24 @@ def train_one_epoch(
                 print(f"[DEBUG] outputs keys: {list(outputs.keys())}")
             else:
                 print(f"[DEBUG] outputs type: {type(outputs)}")
+
+            # FIRST STEP VERIFICATION: dump MoE info structure
+            if batch_idx == 0:
+                print("\n=== FIRST STEP MoE VERIFICATION ===")
+                try:
+                    if hasattr(outputs, 'get') and 'moe_info' in outputs:
+                        _mi = outputs['moe_info']
+                        print(f"MoE info keys: {list(_mi.keys())}")
+                        _aux = _mi.get('aux_losses', {})
+                        if isinstance(_aux, dict):
+                            print(f"Aux loss keys: {list(_aux.keys())[:10]}")
+                        util = _mi.get('expert_utilization', {})
+                        if isinstance(util, dict):
+                            print(f"Expert util keys: {list(util.keys())[:10]}")
+                    else:
+                        print("ERROR: moe_info not in model outputs!")
+                except Exception as _e:
+                    print(f"[WARN] FIRST STEP VERIFICATION failed: {_e}")
             
             # DRE metrics extraction
             if hasattr(outputs, 'get') and outputs.get('routing_info'):
@@ -347,10 +371,40 @@ def train_one_epoch(
                                 elif isinstance(value, list) and len(value) <= 10:  # Avoid logging huge lists
                                     for i, v in enumerate(value):
                                         metrics[f'moe/{key}_expert_{i}'] = v
+                        # Also log aux loss components if we computed them into moe_metrics
+                        if 'aux_loss' in moe_metrics:
+                            metrics['moe/aux_loss_total'] = float(moe_metrics['aux_loss'])
+                        if 'load_balance' in moe_metrics:
+                            metrics['moe/load_balance_loss'] = float(moe_metrics['load_balance'])
+                        if 'z_loss' in moe_metrics:
+                            metrics['moe/z_loss'] = float(moe_metrics['z_loss'])
+                        if 'importance' in moe_metrics:
+                            metrics['moe/importance_loss'] = float(moe_metrics['importance'])
+                        if 'entropy_reg' in moe_metrics:
+                            metrics['moe/entropy_reg_loss'] = float(moe_metrics['entropy_reg'])
+                        # used_moe flag
+                        try:
+                            used_flag = 0
+                            if hasattr(outputs, 'get') and outputs.get('routing_info'):
+                                ri = outputs['routing_info']
+                                used_flag = 1 if bool(ri.get('used_moe', False)) else 0
+                            metrics['moe/used_moe'] = used_flag
+                        except Exception:
+                            pass
                     
                     # Add detailed DRE metrics to MLflow
                     if hasattr(outputs, 'get') and outputs.get('routing_info'):
                         routing_info = outputs['routing_info']
+                        # Current step values
+                        if isinstance(routing_info, dict):
+                            if 'path' in routing_info:
+                                metrics['dre/path_now_flag'] = {
+                                    'fast': 0, 'standard': 0, 'expert': 0, 'deep': 0, 'ultra_deep': 0
+                                }.get(str(routing_info['path']).lower(), 0)
+                            if 'complexity_score' in routing_info:
+                                metrics['dre/complexity_now'] = float(routing_info['complexity_score'])
+                            if 'confidence' in routing_info:
+                                metrics['dre/confidence_now'] = float(routing_info['confidence'])
                         if 'dre_metrics' in routing_info:
                             dre_info = routing_info['dre_metrics']
                             
@@ -377,7 +431,7 @@ def train_one_epoch(
                 pass
 
     epoch_time = time.time() - start_time
-    avg_loss = total_loss / max(1, num_batches)
+    avg_loss = total_raw_loss / max(1, num_batches)
     if is_main_process:
         # Calculate epoch-level perplexity
         try:
