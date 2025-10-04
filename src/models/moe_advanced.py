@@ -41,11 +41,11 @@ class ExpertConfig:
     expert_capacity: float = 1.25  # Capacity factor for load balancing
     expert_dropout: float = 0.1
     
-    # Load balancing loss weights (Switch Transformers approach)
-    load_balance_weight: float = 0.01  # Primary load balancing loss
-    z_loss_weight: float = 0.001  # Router logit regularization
-    importance_weight: float = 0.01  # Routing diversity loss
-    entropy_reg_weight: float = 1.0  # NUCLEAR FIX: Direct entropy regularization
+    # Load balancing loss weights (FIXED: much smaller to prevent overwhelming main loss)
+    load_balance_weight: float = 0.001  # Primary load balancing loss (reduced 10x)
+    z_loss_weight: float = 0.0001  # Router logit regularization (reduced 10x)
+    importance_weight: float = 0.001  # Routing diversity loss (reduced 10x)
+    entropy_reg_weight: float = 0.01  # Entropy regularization (reduced 100x)
     aux_loss_weight: float = 0.01  # Legacy - kept for compatibility
     
     top_k: int = 2  # Number of experts to route to
@@ -91,45 +91,33 @@ class NoisyTopKRouter(nn.Module):
         training: bool = True
     ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         """
-        COMPLETELY REWRITTEN ROUTER with proven balanced routing
+        FIXED ROUTER: Proper balanced routing without gradient explosion
         Returns: (dispatch_mask, combine_weights, aux_losses)
         """
         batch_size, seq_len, hidden_dim = hidden_states.shape
         hidden_states_flat = hidden_states.view(-1, hidden_dim)  # [B*S, H]
         original_dtype = hidden_states.dtype
 
-        # CRITICAL FIX: Force balanced routing with Gumbel-Softmax
+        # Force FP32 for router computation (numerical stability)
         device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
         with torch.amp.autocast(device_type=device_type, enabled=False):
             hs_fp32 = hidden_states_flat.to(dtype=torch.float32)
 
-            # Router logits with VERY small initialization already applied
+            # Router logits (already initialized small in __init__)
             raw_logits = self.gate(hs_fp32)  # [B*S, E]
             
-            # NUCLEAR FIX 1: Add strong uniform bias to force balanced routing
-            uniform_bias = torch.zeros_like(raw_logits)
+            # Add noise during training for exploration (mild, not aggressive)
             if training:
-                # Add uniform noise to break symmetry and encourage exploration
-                uniform_noise = torch.randn_like(raw_logits) * 0.1
-                raw_logits = raw_logits + uniform_noise
-            
-            # NUCLEAR FIX 2: Use Gumbel-Softmax for differentiable balanced routing
-            if training:
-                # Gumbel-Softmax with high temperature for balanced routing
-                gumbel_noise = -torch.log(-torch.log(torch.rand_like(raw_logits) + 1e-10) + 1e-10)
-                logits = (raw_logits + gumbel_noise) / 2.0  # High temperature
+                # Gaussian noise scaled by std
+                noise = torch.randn_like(raw_logits) * self.noise_std * 0.1
+                logits = raw_logits + noise
             else:
                 logits = raw_logits
             
-            # NUCLEAR FIX 3: Explicit entropy maximization
+            # Standard softmax routing (no forced minimum - let the model learn)
             scores = F.softmax(logits, dim=-1)
             
-            # Force minimum probability per expert (prevents complete collapse)
-            min_prob = 0.01  # Each expert gets at least 1% probability
-            scores = scores * (1 - min_prob * self.num_experts) + min_prob
-            scores = scores / scores.sum(dim=-1, keepdim=True)  # Renormalize
-            
-            # Top-k selection with actual_top_k
+            # Top-k selection
             actual_top_k = min(self.top_k, self.num_experts)
             top_k_scores, top_k_indices = torch.topk(scores, actual_top_k, dim=-1)
 
@@ -137,13 +125,13 @@ class NoisyTopKRouter(nn.Module):
             top_k_scores = top_k_scores / top_k_scores.sum(dim=-1, keepdim=True)
             top_k_scores = top_k_scores.to(original_dtype)
         
-        # Create dispatch mask [B*S, E, K] - use actual_top_k
+        # Create dispatch mask [B*S, E, K]
         dispatch_mask = torch.zeros(
             batch_size * seq_len, self.num_experts, actual_top_k,
             dtype=torch.bool, device=hidden_states.device
         )
         
-        # Create combine weights [B*S, E, K] - use actual_top_k
+        # Create combine weights [B*S, E, K]
         combine_weights = torch.zeros(
             batch_size * seq_len, self.num_experts, actual_top_k,
             dtype=hidden_states.dtype, device=hidden_states.device
@@ -155,8 +143,8 @@ class NoisyTopKRouter(nn.Module):
             dispatch_mask[torch.arange(batch_size * seq_len), expert_idx, k] = True
             combine_weights[torch.arange(batch_size * seq_len), expert_idx, k] = top_k_scores[:, k]
         
-        # Compute auxiliary losses for load balancing
-        aux_losses = self._compute_aux_losses(scores, dispatch_mask)
+        # CRITICAL: Pass raw_logits (not scores) for z-loss computation
+        aux_losses = self._compute_aux_losses(scores, dispatch_mask, raw_logits)
         
         # Reshape back
         dispatch_mask = dispatch_mask.view(batch_size, seq_len, self.num_experts, actual_top_k)
@@ -167,11 +155,11 @@ class NoisyTopKRouter(nn.Module):
     def _compute_aux_losses(
         self,
         scores: torch.Tensor,
-        dispatch_mask: torch.Tensor
+        dispatch_mask: torch.Tensor,
+        raw_logits: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
-        """Compute load balancing auxiliary losses"""
+        """Compute load balancing auxiliary losses (FIXED)"""
         # Load balancing loss (encourage equal expert usage)
-        # Cast to float32 for numerical stability in loss computation
         expert_usage = dispatch_mask.float().sum(dim=(0, 2))  # [E]
         expert_usage = expert_usage / (expert_usage.sum() + 1e-10)
         
@@ -190,16 +178,15 @@ class NoisyTopKRouter(nn.Module):
         else:
             importance_loss = torch.var(importance, unbiased=False) / (torch.mean(importance) ** 2 + 1e-10)
         
-        # NUCLEAR FIX: Direct entropy regularization to force balanced routing
-        # Calculate entropy of routing distribution
+        # Entropy regularization (encourage exploration)
         routing_entropy = -torch.sum(scores * torch.log(scores + 1e-10), dim=-1).mean()
         max_entropy = torch.log(torch.tensor(float(self.num_experts), device=scores.device))
+        # Moderate penalty (not aggressive)
+        entropy_reg_loss = (max_entropy - routing_entropy)
         
-        # Entropy regularization loss - encourage high entropy (uniform distribution)
-        entropy_reg_loss = (max_entropy - routing_entropy) * 10.0  # Strong penalty for low entropy
-        
-        # Z-loss (encourage router confidence)
-        log_z = torch.logsumexp(scores, dim=-1)
+        # CRITICAL FIX: Z-loss on RAW LOGITS, not probabilities!
+        # Prevents logits from growing too large (gradient stability)
+        log_z = torch.logsumexp(raw_logits, dim=-1)
         z_loss = torch.mean(log_z ** 2)
         
         return {
