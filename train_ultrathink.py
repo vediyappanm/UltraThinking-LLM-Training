@@ -451,17 +451,18 @@ class UltraThinkTrainer:
         train_sampler = DistributedSampler(train_dataset) if is_dist else None
         val_sampler = DistributedSampler(val_dataset) if is_dist else None
         
-        # CRITICAL FIX: Optimize data loading with more workers and persistent workers
-        optimal_workers = min(self.args.num_workers * 2, 6)  # 2x workers, max 6
+        # CRITICAL FIX: Optimize data loading for Colab (avoid too many workers on limited CPU)
+        # Colab has 2 CPUs, so use 0 workers to avoid overhead
+        optimal_workers = 0 if not torch.cuda.is_available() else min(self.args.num_workers, 2)
         self.train_loader = DataLoader(
             train_dataset,
             batch_size=self.args.batch_size,
             sampler=train_sampler,
             shuffle=(train_sampler is None),
             num_workers=optimal_workers,
-            pin_memory=False,  # Disable pin_memory on CPU
-            persistent_workers=True if optimal_workers > 0 else False,
-            prefetch_factor=4 if optimal_workers > 0 else None,
+            pin_memory=torch.cuda.is_available(),  # Enable pin_memory only with GPU
+            persistent_workers=False,  # Disable for Colab to save memory
+            prefetch_factor=2 if optimal_workers > 0 else None,
             drop_last=True
         )
         
@@ -569,25 +570,55 @@ class UltraThinkTrainer:
                 'avg_loss': total_loss / num_batches
             })
             
-            # Log to MLflow
-            if getattr(self.args, 'use_mlflow', False) and self.is_main_process() and batch_idx % 100 == 0:
+            # Enhanced MLflow logging with MoE & DRE metrics
+            if getattr(self.args, 'use_mlflow', False) and self.is_main_process() and (batch_idx + 1) % self.args.gradient_accumulation_steps == 0:
                 try:
-                    mlflow.log_metrics({
-                        'train/loss': float(loss.item()),
+                    metrics_to_log = {
+                        'train/loss': float(loss.item() * self.args.gradient_accumulation_steps),
                         'train/learning_rate': float(self.scheduler.get_last_lr()[0]) if self.scheduler is not None else 0.0,
                         'train/epoch': float(epoch),
-                    }, step=epoch * len(self.train_loader) + batch_idx)
+                        'train/global_step': self.global_step,
+                    }
+                    
+                    # Add MoE metrics if available
+                    if hasattr(outputs, 'get') and outputs.get('moe_info'):
+                        moe_info = outputs['moe_info']
+                        if 'expert_utilization' in moe_info:
+                            for k, v in moe_info['expert_utilization'].items():
+                                metrics_to_log[f'moe/{k}'] = float(v) if isinstance(v, (int, float)) else 0.0
+                        if 'moe_aux_loss' in outputs:
+                            metrics_to_log['moe/aux_loss'] = float(outputs['moe_aux_loss'])
+                    
+                    # Add DRE metrics if available
+                    if hasattr(outputs, 'get') and outputs.get('routing_info'):
+                        routing = outputs['routing_info']
+                        if 'complexity' in routing:
+                            metrics_to_log['dre/complexity'] = float(routing['complexity'])
+                        if 'confidence' in routing:
+                            metrics_to_log['dre/confidence'] = float(routing['confidence'])
+                    
+                    # Log gradient norms every N steps
+                    if self.global_step % 10 == 0:
+                        total_norm = 0.0
+                        for p in self.model.parameters():
+                            if p.grad is not None:
+                                total_norm += p.grad.data.norm(2).item() ** 2
+                        total_norm = total_norm ** 0.5
+                        metrics_to_log['train/grad_norm'] = total_norm
+                    
+                    mlflow.log_metrics(metrics_to_log, step=self.global_step)
                 except Exception as _e:
                     logger.debug(f"MLflow logging skipped: {_e}")
         
         return total_loss / num_batches
     
     def validate(self):
-        """Validate model"""
+        """Validate model with enhanced metrics"""
         self.model.eval()
         
         total_loss = 0
         num_batches = 0
+        total_tokens = 0
         
         with torch.no_grad():
             for batch in tqdm(self.val_loader, desc="Validation", disable=not self.is_main_process()):
@@ -598,14 +629,25 @@ class UltraThinkTrainer:
                 
                 total_loss += loss.item()
                 num_batches += 1
+                
+                # Count tokens for perplexity calculation
+                if 'input_ids' in batch:
+                    total_tokens += batch['input_ids'].numel()
         
         avg_loss = total_loss / num_batches
+        perplexity = torch.exp(torch.tensor(avg_loss)).item()
         
         if getattr(self.args, 'use_mlflow', False) and self.is_main_process():
             try:
-                mlflow.log_metric('val/loss', float(avg_loss))
+                mlflow.log_metrics({
+                    'val/loss': float(avg_loss),
+                    'val/perplexity': float(perplexity),
+                    'val/num_batches': num_batches,
+                }, step=self.global_step)
             except Exception as _e:
                 logger.debug(f"MLflow logging skipped: {_e}")
+        
+        logger.info(f"Validation - Loss: {avg_loss:.4f}, Perplexity: {perplexity:.2f}")
         
         return avg_loss
     
@@ -696,7 +738,7 @@ class UltraThinkTrainer:
         return results
     
     def save_checkpoint(self, epoch: int, val_loss: float):
-        """Save model checkpoint"""
+        """Save model checkpoint with text generation sample"""
         if not self.is_main_process():
             return
         
@@ -711,20 +753,54 @@ class UltraThinkTrainer:
             'optimizer_state_dict': self.optimizer.state_dict() if hasattr(self, 'optimizer') else None,
             'scheduler_state_dict': self.scheduler.state_dict(),
             'val_loss': val_loss,
-            'config': self.config
+            'config': self.config,
+            'global_step': self.global_step,
         }
         
         torch.save(checkpoint, checkpoint_path)
         logger.info(f"Checkpoint saved to {checkpoint_path}")
         
+        # Generate sample text for quality check
+        try:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(self.args.tokenizer_name)
+            test_prompt = "The future of artificial intelligence is"
+            inputs = tokenizer(test_prompt, return_tensors='pt').to(self.device)
+            
+            self.model.eval()
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    input_ids=inputs['input_ids'],
+                    max_length=50,
+                    num_return_sequences=1,
+                    temperature=0.8,
+                    do_sample=True,
+                )
+                generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                logger.info(f"Sample generation: {generated_text}")
+                
+                # Log to MLflow
+                if getattr(self.args, 'use_mlflow', False):
+                    mlflow.log_text(generated_text, f"samples/epoch_{epoch}_sample.txt")
+            self.model.train()
+        except Exception as e:
+            logger.debug(f"Sample generation skipped: {e}")
+        
         # Save model in HuggingFace format
         if epoch == self.args.num_epochs - 1:
             self.model.save_pretrained(os.path.join(self.args.output_dir, 'final_model'))
         
-        # Log checkpoint as MLflow artifact
+        # Log checkpoint as MLflow artifact (skip large files in Colab)
         if getattr(self.args, 'use_mlflow', False) and self.is_main_process():
             try:
-                mlflow.log_artifact(checkpoint_path, artifact_path='checkpoints')
+                # Only log checkpoint metadata, not the full file (too large for Colab)
+                checkpoint_info = {
+                    'epoch': epoch,
+                    'val_loss': float(val_loss),
+                    'global_step': self.global_step,
+                    'checkpoint_path': checkpoint_path,
+                }
+                mlflow.log_dict(checkpoint_info, f"checkpoints/epoch_{epoch}_info.json")
             except Exception as _e:
                 logger.debug(f"MLflow artifact logging skipped: {_e}")
     
@@ -875,7 +951,7 @@ def parse_args():
     parser.add_argument('--ppo_batch_size', type=int, default=32)
 
     # Data settings
-    parser.add_argument('--dataset', type=str, default='wikitext', 
+    parser.add_argument('--dataset', type=str, default='c4', 
                        help='Dataset to use (wikitext, openwebtext, pile, c4, bookcorpus, dummy, custom)')
     parser.add_argument('--mix_datasets', type=str, default=None,
                        help='Comma-separated list of dataset:weight pairs to mix, e.g. "wikitext:0.5,openwebtext:0.5". Overrides --dataset if set.')
@@ -888,7 +964,7 @@ def parse_args():
 
     parser.add_argument('--train_samples', type=int, default=10000, help='Number of training samples (for dummy dataset)')
     parser.add_argument('--val_samples', type=int, default=1000, help='Number of validation samples (for dummy dataset)')
-    parser.add_argument('--num_workers', type=int, default=4, help='Number of data loading workers')
+    parser.add_argument('--num_workers', type=int, default=0, help='Number of data loading workers (0 for Colab to avoid CPU overhead)')
     parser.add_argument('--use_synthetic_data', action='store_true', help='Use synthetic data generation')
     parser.add_argument('--synthetic_samples', type=int, default=5000, help='Number of synthetic samples')
 
