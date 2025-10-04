@@ -271,12 +271,17 @@ class UltraThinkCore(nn.Module):
             moe_info = {}
             
             # Apply MoE layers based on DRE routing decision
-            use_moe_now = (self.moe_layers is not None)
+            configured_moe_layers = (len(self.moe_layers) if self.moe_layers is not None else 0)
+            use_moe_now = (self.moe_layers is not None) and (configured_moe_layers > 0)
             if isinstance(routing_info, dict) and 'use_moe' in routing_info:
                 use_moe_now = use_moe_now and bool(routing_info['use_moe'])
-            # Persist final decision for logging/UI
+            # Persist final decision for logging/UI and emit debug
             if isinstance(routing_info, dict):
                 routing_info['used_moe'] = bool(use_moe_now)
+            try:
+                logger.info("[DEBUG MoE] configured_layers=%d use_moe_now=%s", configured_moe_layers, str(use_moe_now))
+            except Exception:
+                pass
 
             if use_moe_now:
                 for layer_idx_str, moe_layer in self.moe_layers.items():

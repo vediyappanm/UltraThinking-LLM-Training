@@ -86,23 +86,33 @@ class ComplexityScorer(nn.Module):
         """Extract complexity features from input"""
         # Token statistics
         token_length = len(tokens)
+
+        # Calculate token entropy from token histogram (sequence-level diversity)
+        try:
+            # Use unique token frequencies as a proxy for complexity
+            uniq, counts = torch.unique(tokens.to(torch.int64), return_counts=True)
+            probs = (counts.to(torch.float32) / counts.sum()).clamp_min(1e-10)
+            token_entropy = float(-(probs * torch.log(probs)).sum().item())
+        except Exception:
+            token_entropy = float(torch.log(torch.tensor(token_length + 1e-6)).item())
         
-        # Calculate token entropy
-        token_probs = torch.softmax(torch.randn(len(tokens)), dim=-1)  # Placeholder
-        token_entropy = -torch.sum(token_probs * torch.log(token_probs + 1e-10)).item()
-        
-        # Domain detection
-        has_math = any(symbol in text for symbol in ['=', '∫', '∑', '∂', 'sqrt', 'log'])
-        has_code = any(keyword in text for keyword in ['def', 'class', 'function', '{', '}', '()', '[]'])
-        
-        # Named entities (simplified)
+        # Domain detection (best-effort; text may be empty during LM training)
+        has_math = bool(text) and any(symbol in text for symbol in ['=', '∫', '∑', '∂', 'sqrt', 'log'])
+        has_code = bool(text) and any(keyword in text for keyword in ['def', 'class', 'function', '{', '}', '()', '[]'])
+
+        # Named entities (simplified; may be zero if text not provided)
         import re
-        capitals = re.findall(r'\b[A-Z][a-z]+\b', text)
-        named_entities_count = len(set(capitals))
-        
-        # Syntactic complexity (simplified - could use actual parser)
-        syntactic_depth = len(text.split('.')) * np.log(1 + len(text.split(',')))
-        
+        capitals = re.findall(r'\b[A-Z][a-z]+\b', text) if text else []
+        named_entities_count = len(set(capitals)) if capitals else 0
+
+        # Syntactic complexity (simplified; use text if available)
+        syntactic_depth = 0
+        if text:
+            syntactic_depth = len(text.split('.')) * np.log(1 + len(text.split(',')))
+        else:
+            # Fall back to token-length proxy
+            syntactic_depth = float(np.log(1 + token_length))
+
         return ComplexityFeatures(
             token_length=token_length,
             token_entropy=token_entropy,
@@ -441,7 +451,8 @@ class DynamicReasoningEngine(nn.Module):
         else:
             # Coerce to tensor on the right device/dtype
             complexity_features_tensor = torch.as_tensor(complexity_features, dtype=complexity_hidden.dtype, device=complexity_hidden.device)
-        complexity_score_tensor = 0.7 * complexity_hidden + 0.3 * complexity_features_tensor
+        # Heavily weight token-entropy features to avoid near-constant scores from the untrained head
+        complexity_score_tensor = 0.2 * complexity_hidden + 0.8 * complexity_features_tensor
         complexity_score = float(complexity_score_tensor.mean().detach().cpu().item())
         
         # Get router prediction (allow grads for router so it can learn via aux loss)

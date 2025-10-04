@@ -235,19 +235,35 @@ def train_one_epoch(
                     if max_concentration > 0:
                         moe_metrics['max_expert_pct'] = max_concentration
                 
-                # Auxiliary loss metrics
+                # Auxiliary loss metrics (detailed)
                 if 'aux_losses' in moe_info:
                     aux_losses = moe_info['aux_losses']
                     total_aux = 0.0
+                    lb, zl, imp, ent = 0.0, 0.0, 0.0, 0.0
                     for key, loss_val in aux_losses.items():
                         if isinstance(loss_val, torch.Tensor):
-                            # Handle both scalar and multi-element tensors
-                            if loss_val.numel() == 1:
-                                total_aux += float(loss_val.detach())
-                            else:
-                                total_aux += float(loss_val.detach().mean())
+                            val = float(loss_val.detach().mean()) if loss_val.numel() > 1 else float(loss_val.detach())
+                        else:
+                            try:
+                                val = float(loss_val)
+                            except Exception:
+                                continue
+                        total_aux += val
+                        if 'load_loss' in key:
+                            lb += val
+                        elif 'z_loss' in key:
+                            zl += val
+                        elif 'importance_loss' in key:
+                            imp += val
+                        elif 'entropy_reg_loss' in key:
+                            ent += val
                     aux_loss_value = total_aux
                     moe_metrics['aux_loss'] = aux_loss_value
+                    # Expose detailed components
+                    moe_metrics['load_balance'] = lb
+                    moe_metrics['z_loss'] = zl
+                    moe_metrics['importance'] = imp
+                    moe_metrics['entropy_reg'] = ent
             
             # Log loss, perplexity, throughput, MoE and DRE metrics to console
             moe_str = ""
@@ -259,6 +275,23 @@ def train_one_epoch(
                     moe_parts.append(f"max_exp={moe_metrics['max_expert_pct']:.1f}%")
                 if 'aux_loss' in moe_metrics and moe_metrics['aux_loss'] > 0:
                     moe_parts.append(f"aux={moe_metrics['aux_loss']:.4f}")
+                if 'load_balance' in moe_metrics:
+                    moe_parts.append(f"lb={moe_metrics['load_balance']:.4f}")
+                if 'z_loss' in moe_metrics:
+                    moe_parts.append(f"z={moe_metrics['z_loss']:.4f}")
+                if 'importance' in moe_metrics:
+                    moe_parts.append(f"imp={moe_metrics['importance']:.4f}")
+                if 'entropy_reg' in moe_metrics:
+                    moe_parts.append(f"ent_reg={moe_metrics['entropy_reg']:.4f}")
+                # Whether MoE was actually used this step
+                try:
+                    used_moe_flag = False
+                    if hasattr(outputs, 'get') and outputs.get('routing_info'):
+                        ri = outputs['routing_info']
+                        used_moe_flag = bool(ri.get('used_moe', False)) if isinstance(ri, dict) else False
+                    moe_parts.append(f"used_moe={str(used_moe_flag)}")
+                except Exception:
+                    pass
                 if moe_parts:
                     moe_str = f" moe=[{','.join(moe_parts)}]"
             

@@ -230,6 +230,8 @@ class UltraThinkTrainer:
             enable_moe=self.args.enable_moe,
             enable_multimodal=self.args.enable_multimodal,
             enable_rlhf=self.args.enable_rlhf,
+            # Align MoE layer placement with the actual depth; use every other layer
+            moe_layers=list(range(1, self.args.num_layers, 2)),
             batch_size=self.args.batch_size,
             gradient_accumulation=self.args.gradient_accumulation_steps,
             learning_rate=self.args.learning_rate,
