@@ -109,17 +109,7 @@ def train_one_epoch(
             else:
                 loss.backward()
             
-            # CRITICAL FIX: Calculate gradient norms for all params
-            current_total_grad_norm = 0.0
-            current_router_grad_norm = 0.0
-            for name, param in model.named_parameters():
-                if param.grad is not None:
-                    param_norm = param.grad.data.norm(2)
-                    current_total_grad_norm += param_norm.item() ** 2
-                    if 'gate' in name or 'router' in name:
-                        current_router_grad_norm += param_norm.item() ** 2
-            current_total_grad_norm = current_total_grad_norm ** (1. / 2)
-            current_router_grad_norm = current_router_grad_norm ** (1. / 2)
+            # Defer accurate gradient norm computation to accumulation boundary after unscale
             
             # Gradient clipping and optimizer step
             if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
@@ -128,6 +118,18 @@ def train_one_epoch(
                     if args.gradient_clipping > 0:
                         if scaler is not None:
                             scaler.unscale_(optimizer)
+                        # Compute accurate grad norms AFTER unscale and BEFORE clipping
+                        current_total_grad_norm = 0.0
+                        current_router_grad_norm = 0.0
+                        for name, param in model.named_parameters():
+                            if param.grad is not None:
+                                param_norm = param.grad.data.norm(2)
+                                current_total_grad_norm += param_norm.item() ** 2
+                                if 'gate' in name or 'router' in name:
+                                    current_router_grad_norm += param_norm.item() ** 2
+                        current_total_grad_norm = current_total_grad_norm ** 0.5
+                        current_router_grad_norm = current_router_grad_norm ** 0.5
+
                         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.gradient_clipping)
                     
                     # Optimizer step
