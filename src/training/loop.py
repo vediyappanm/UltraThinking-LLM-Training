@@ -247,17 +247,39 @@ def train_one_epoch(
                 if 'expert_utilization' in moe_info:
                     util = moe_info['expert_utilization']
                     
-                    # Key metrics for console display
-                    if 'avg_routing_entropy' in util:
+                    # Prefer entropy averaged over groups with >1 expert
+                    num_used = moe_info.get('num_experts_used', {})
+                    entropies = []
+                    for expert_type in ['knowledge', 'skill', 'meta', 'safety']:
+                        if num_used.get(expert_type, 1) > 1:
+                            ent_key = f"{expert_type}_entropy"
+                            if ent_key in util:
+                                try:
+                                    entropies.append(float(util[ent_key]))
+                                except Exception:
+                                    pass
+                    if entropies:
+                        moe_metrics['entropy'] = float(sum(entropies) / max(1, len(entropies)))
+                    elif 'avg_routing_entropy' in util:
+                        # Fallback to overall average if no multi-expert groups exist
                         moe_metrics['entropy'] = util['avg_routing_entropy']
                     
-                    # Check for expert collapse (top expert getting >80% of traffic)
-                    max_concentration = 0
+                    # Max expert %: ignore single-expert groups to avoid false 100%
+                    max_concentration = None
                     for expert_type in ['knowledge', 'skill', 'meta', 'safety']:
-                        key = f"{expert_type}_top_expert_pct"
-                        if key in util:
-                            max_concentration = max(max_concentration, util[key])
-                    
+                        if num_used.get(expert_type, 1) > 1:
+                            key = f"{expert_type}_top_expert_pct"
+                            if key in util:
+                                val = float(util[key])
+                                max_concentration = val if (max_concentration is None) else max(max_concentration, val)
+                    # Fallback: if no multi-expert groups, use the existing aggregate (may be 100% by design)
+                    if max_concentration is None:
+                        tmp = 0.0
+                        for expert_type in ['knowledge', 'skill', 'meta', 'safety']:
+                            key = f"{expert_type}_top_expert_pct"
+                            if key in util:
+                                tmp = max(tmp, float(util[key]))
+                        max_concentration = tmp
                     if max_concentration > 0:
                         moe_metrics['max_expert_pct'] = max_concentration
                 
