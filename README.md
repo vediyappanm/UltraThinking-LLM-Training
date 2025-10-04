@@ -204,6 +204,89 @@ We welcome contributions! Please see:
 
 See **[MODEL_CARD.md](MODEL_CARD.md)** for complete specifications.
 
+## 📈 Results: Expert-Forced Sanity Check (2025-10-04)
+
+This run validates that the Mixture of Experts (MoE) is activating when the Dynamic Reasoning Engine (DRE) routes to the EXPERT path. It also confirms detailed MoE and DRE metrics logging during training.
+
+  - Model: `hidden_size=512`, `num_layers=6`, `num_heads=8`, `intermediate=2048`, `max_seq_length=256`
+  - Dataset: `C4` (subset `en`), streaming
+  - MoE: Enabled, 3 MoE layers (`moe_layers=[1,3,5]`), `top_k=1`
+  - DRE: Enabled, forced path=`expert`
+  - Precision/Perf: AMP + gradient checkpointing
+
+- **Highlights (first logged optimizer step)**
+  - Train loss: `11.0715` (ppl `~64,310`)
+  - Validation snapshots: `val_loss ≈ 11.03 – 11.08`
+  - MoE: `used_moe=True`, `aux_total=13.0268`
+    - Load balance: `0.0024`
+    - z-loss: `6.1708`
+    - Importance: `0.0028`
+    - Entropy reg: `2.0303`
+  - DRE: `path=expert`, complexity ranged `~0.15 – 0.47`
+  - Latency per routing: `~0.62 – 1.04s`
+
+### Curves and Visuals
+
+- **Interactive Curves (MLflow)**
+  - Start UI:
+    ```bash
+    mlflow ui --backend-store-uri file:./mlruns
+    ```
+  - Experiment: `UltraThinking-LLM-Training`
+  - Run name: `expert_forced_colab_check`
+  - Useful metrics: `train/step_loss`, `train/step_perplexity`, `moe/*`, `dre/*`
+
+- **Routing Path Distribution** (forced Expert)
+
+```mermaid
+pie title Routing Path Distribution
+  "EXPERT" : 100
+  "STANDARD" : 0
+  "FAST" : 0
+  "DEEP" : 0
+  "ULTRA_DEEP" : 0
+```
+
+- **MoE Aux Loss Breakdown (Step 0)**
+
+| Metric | Value |
+|---|---|
+| Load balance loss | 0.0024 |
+| Z loss | 6.1708 |
+| Importance loss | 0.0028 |
+| Entropy reg loss | 2.0303 |
+| Aux total | 13.0268 |
+
+- **Complexity (sampled sparkline)**
+
+```
+0.45 0.45 0.47 0.44 0.26 0.19 0.23 0.27 0.42 0.45 ...
+```
+
+### Reproduce This Run
+
+```bash
+python train_ultrathink.py \
+  --dataset c4 --dataset_subset en --streaming \
+  --hidden_size 512 --num_layers 6 --num_heads 8 --num_kv_heads 4 \
+  --intermediate_size 2048 --max_seq_length 256 --activation swiglu \
+  --enable_moe --num_knowledge_experts 4 --num_skill_experts 2 --num_meta_experts 1 --num_safety_experts 1 \
+  --moe_top_k 1 --expert_capacity 1.25 --load_balance_weight 0.01 --z_loss_weight 0.001 --importance_weight 0.01 \
+  --enable_dre --dre_warmup_steps 0 --dre_force_path expert \
+  --batch_size 1 --gradient_accumulation_steps 16 \
+  --learning_rate 3e-4 --weight_decay 0.01 --warmup_steps 500 \
+  --num_epochs 1 --max_steps 1000000 \
+  --gradient_clipping 1.0 --dropout 0.0 --attention_dropout 0.0 \
+  --use_amp --amp_warmup_steps 0 --gradient_checkpointing \
+  --use_mlflow --mlflow_tracking_uri file:./mlruns --mlflow_experiment UltraThinking-LLM-Training \
+  --run_name expert_forced_colab_check \
+  --output_dir ./outputs/expert_forced_colab_check
+```
+
+Notes:
+- MoE layers are automatically aligned to depth via `UltraThinkConfig.moe_layers` (`[1,3,5]` for 6 layers).
+- Detailed per-step MoE metrics and `used_moe` flag are printed in the training log and logged to MLflow.
+
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) for details.
