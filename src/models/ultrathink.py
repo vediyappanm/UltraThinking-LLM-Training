@@ -220,24 +220,24 @@ class UltraThinkCore(nn.Module):
                     if isinstance(raw_rpath, str):
                         try:
                             rpath = ReasoningPath[raw_rpath.upper()]
-                            logger.info(f"[DEBUG] UltraThinkCore: normalized reasoning_path '{raw_rpath}' -> {rpath}")
+                            logger.debug(f"[DEBUG] UltraThinkCore: normalized reasoning_path '{raw_rpath}' -> {rpath}")
                         except Exception:
                             rpath = None
-                            logger.info(f"[DEBUG] UltraThinkCore: failed to normalize reasoning_path '{raw_rpath}'")
+                            logger.debug(f"[DEBUG] UltraThinkCore: failed to normalize reasoning_path '{raw_rpath}'")
                     else:
                         rpath = raw_rpath
-                        logger.info(f"[DEBUG] UltraThinkCore: reasoning_path already enum: {rpath}")
+                        logger.debug(f"[DEBUG] UltraThinkCore: reasoning_path already enum: {rpath}")
                     # Persist valid overrides across subsequent batches
                     if rpath is not None:
                         setattr(self, "_force_reasoning_path", rpath)
-                        logger.info(f"[DEBUG] UltraThinkCore: persisted reasoning_path override {rpath}")
+                        logger.debug(f"[DEBUG] UltraThinkCore: persisted reasoning_path override {rpath}")
                 else:
                     # No new override provided; reuse any persisted one
                     rpath = getattr(self, "_force_reasoning_path", None)
                     if rpath is not None:
-                        logger.info(f"[DEBUG] UltraThinkCore: reused persisted reasoning_path override {rpath}")
+                        logger.debug(f"[DEBUG] UltraThinkCore: reused persisted reasoning_path override {rpath}")
                     else:
-                        logger.info(f"[DEBUG] UltraThinkCore: no reasoning_path override (got: {raw_rpath})")
+                        logger.debug(f"[DEBUG] UltraThinkCore: no reasoning_path override (got: {raw_rpath})")
                 dre_outputs = self.dre(
                     input_ids=input_ids,
                     text=text,
@@ -279,7 +279,7 @@ class UltraThinkCore(nn.Module):
             if isinstance(routing_info, dict):
                 routing_info['used_moe'] = bool(use_moe_now)
             try:
-                logger.info("[DEBUG MoE] configured_layers=%d use_moe_now=%s", configured_moe_layers, str(use_moe_now))
+                logger.debug("[DEBUG MoE] configured_layers=%d use_moe_now=%s", configured_moe_layers, str(use_moe_now))
             except Exception:
                 pass
 

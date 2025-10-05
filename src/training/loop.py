@@ -46,8 +46,9 @@ def train_one_epoch(
     print(f"[DEBUG] gradient_accumulation_steps: {args.gradient_accumulation_steps}")
     
     for batch_idx, batch in enumerate(train_loader):
-        # DEBUG: Print EVERY batch to see loop execution
-        print(f"[DEBUG] Batch {batch_idx}: global_step={global_step}")
+        # Only log at accumulation boundaries or first batch
+        if batch_idx == 0 or (batch_idx + 1) % args.gradient_accumulation_steps == 0:
+            pass  # Will log below
         
         batch = {k: v.to(device) for k, v in batch.items()}
         step_start = time.time()
@@ -56,10 +57,11 @@ def train_one_epoch(
         if getattr(args, "dre_warmup_steps", 0) and global_step < args.dre_warmup_steps:
             use_dre_now = False
         
-        # Debug: log the reasoning_path being passed
-        force_path = getattr(args, "dre_force_path", None)
-        if force_path:
-            logger.info(f"[DEBUG] Training loop passing reasoning_path={force_path} to model")
+        # Debug: log the reasoning_path being passed (only once at start)
+        if batch_idx == 0:
+            force_path = getattr(args, "dre_force_path", None)
+            if force_path:
+                logger.info(f"[DEBUG] Training loop passing reasoning_path={force_path} to model")
 
         if _is_deepspeed_engine(model):
             outputs = model(
@@ -156,7 +158,6 @@ def train_one_epoch(
 
         # ALWAYS LOG after each gradient accumulation step; also log first micro-batch for verification
         should_log = ((batch_idx + 1) % args.gradient_accumulation_steps == 0) or (batch_idx == 0)
-        print(f"[DEBUG] After batch {batch_idx}: (batch_idx+1)={batch_idx+1}, grad_accum={args.gradient_accumulation_steps}, should_log={should_log}")
         
         if should_log:
             # Calculate current step loss (unscaled for gradient accumulation)
@@ -180,12 +181,13 @@ def train_one_epoch(
             dre_metrics = {}
             aux_loss_value = 0.0
             
-            # CRITICAL DEBUG: Always print to confirm logging is working
-            print(f"[DEBUG] batch_idx={batch_idx}, global_step={global_step}, should_log={should_log}")
-            if hasattr(outputs, 'keys'):
-                print(f"[DEBUG] outputs keys: {list(outputs.keys())}")
-            else:
-                print(f"[DEBUG] outputs type: {type(outputs)}")
+            # Log only at first step for verification
+            if batch_idx == 0:
+                print(f"[DEBUG] batch_idx={batch_idx}, global_step={global_step}, should_log={should_log}")
+                if hasattr(outputs, 'keys'):
+                    print(f"[DEBUG] outputs keys: {list(outputs.keys())}")
+                else:
+                    print(f"[DEBUG] outputs type: {type(outputs)}")
 
             # FIRST STEP VERIFICATION: dump MoE info structure
             if batch_idx == 0:

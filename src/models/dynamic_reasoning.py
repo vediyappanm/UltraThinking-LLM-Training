@@ -463,7 +463,7 @@ class DynamicReasoningEngine(nn.Module):
         
         # Override if specified
         if override_path:
-            logger.info(f"DRE: Using override path={override_path.value}")
+            logger.debug(f"DRE: Using override path={override_path.value}")
             return RoutingDecision(
                 path=override_path,
                 confidence=1.0,
@@ -682,7 +682,7 @@ class DynamicReasoningEngine(nn.Module):
             is_compiling = False
         if not is_compiling:
             # Use logger parameter interpolation to avoid formatting issues
-            logger.info("DRE: Path=%s, Complexity=%.3f, Latency=%.1fms",
+            logger.debug("DRE: Path=%s, Complexity=%.3f, Latency=%.1fms",
                         routing_decision.path.value,
                         float(routing_decision.complexity_score),
                         float(latency_ms))
