@@ -452,9 +452,11 @@ class UltraThinkTrainer:
         train_sampler = DistributedSampler(train_dataset) if is_dist else None
         val_sampler = DistributedSampler(val_dataset) if is_dist else None
         
-        # CRITICAL FIX: Optimize data loading for Colab (avoid too many workers on limited CPU)
-        # Colab has 2 CPUs, so use 0 workers to avoid overhead
-        optimal_workers = 0 if not torch.cuda.is_available() else min(self.args.num_workers, 2)
+        # CRITICAL FIX: Windows-compatible DataLoader (avoid multiprocessing deadlock)
+        # On Windows, multiprocessing with DataLoader can cause deadlocks - use num_workers=0
+        # This is safer and prevents hanging after first batch
+        optimal_workers = 0  # Force 0 workers on Windows to avoid deadlock
+        
         self.train_loader = DataLoader(
             train_dataset,
             batch_size=self.args.batch_size,
@@ -462,9 +464,10 @@ class UltraThinkTrainer:
             shuffle=(train_sampler is None),
             num_workers=optimal_workers,
             pin_memory=torch.cuda.is_available(),  # Enable pin_memory only with GPU
-            persistent_workers=False,  # Disable for Colab to save memory
-            prefetch_factor=2 if optimal_workers > 0 else None,
-            drop_last=True
+            persistent_workers=False,  # Must be False when num_workers=0
+            prefetch_factor=None,  # Must be None when num_workers=0
+            drop_last=True,
+            timeout=0  # No timeout when num_workers=0
         )
         
         self.val_loader = DataLoader(
@@ -473,7 +476,10 @@ class UltraThinkTrainer:
             sampler=val_sampler,
             shuffle=False,
             num_workers=0,
-            pin_memory=False
+            pin_memory=False,
+            persistent_workers=False,
+            prefetch_factor=None,
+            timeout=0
         )
         
         # Generate synthetic data if requested

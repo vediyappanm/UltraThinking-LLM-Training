@@ -45,12 +45,37 @@ def train_one_epoch(
     print(f"[DEBUG] Starting training loop, train_loader length estimate: {len(train_loader) if hasattr(train_loader, '__len__') else 'unknown'}")
     print(f"[DEBUG] gradient_accumulation_steps: {args.gradient_accumulation_steps}")
     
-    for batch_idx, batch in enumerate(train_loader):
+    # Windows fix: Wrap iterator to catch any deadlock issues
+    try:
+        train_iterator = iter(train_loader)
+    except Exception as e:
+        logger.error(f"Failed to create train_loader iterator: {e}")
+        raise
+    
+    batch_idx = 0
+    while True:
+        # Try to get next batch with error handling
+        try:
+            batch = next(train_iterator)
+        except StopIteration:
+            print(f"[DEBUG] Completed epoch - processed {batch_idx} batches")
+            break
+        except Exception as e:
+            logger.error(f"Error fetching batch {batch_idx}: {e}")
+            # Try to continue with next batch
+            batch_idx += 1
+            continue
         # Only log at accumulation boundaries or first batch
         if batch_idx == 0 or (batch_idx + 1) % args.gradient_accumulation_steps == 0:
             pass  # Will log below
         
-        batch = {k: v.to(device) for k, v in batch.items()}
+        # Move data to device (non-blocking for efficiency)
+        try:
+            batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
+        except Exception as e:
+            logger.error(f"Error moving batch to device: {e}")
+            batch_idx += 1
+            continue
         step_start = time.time()
 
         use_dre_now = True
@@ -447,6 +472,9 @@ def train_one_epoch(
                 except Exception as e:
                     pass  # Silent fail for MLflow logging
         last_step_time = time.time()
+        
+        # Increment batch counter
+        batch_idx += 1
 
         # Profiler step if provided
         profiler = getattr(args, "_profiler", None)
@@ -455,6 +483,22 @@ def train_one_epoch(
                 profiler.step()
             except Exception:
                 pass
+        
+        # Periodic heartbeat to detect hangs
+        if batch_idx % 10 == 0:
+            print(f"[HEARTBEAT] batch_idx={batch_idx}, global_step={global_step}, elapsed={time.time() - start_time:.1f}s")
+        
+        # Memory cleanup to prevent hangs (especially on Windows)
+        if batch_idx % 5 == 0:
+            # Delete references to help garbage collection
+            del batch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                # Force synchronization to catch any CUDA errors
+                try:
+                    torch.cuda.synchronize()
+                except Exception as cuda_err:
+                    logger.warning(f"CUDA synchronization warning at batch {batch_idx}: {cuda_err}")
 
     epoch_time = time.time() - start_time
     avg_loss = total_raw_loss / max(1, num_batches)
@@ -494,11 +538,27 @@ def train_one_epoch(
 
 
 def validate_epoch(*, model, val_loader, device, is_main_process: bool) -> float:
+    import torch.nn.functional as F
     model.eval()
     total_loss = 0.0
     num = 0
     with torch.no_grad():
-        for batch in val_loader:
+        # Windows fix: Use iterator with error handling
+        try:
+            val_iterator = iter(val_loader)
+        except Exception as e:
+            logger.error(f"Failed to create val_loader iterator: {e}")
+            return float('inf')
+        
+        while True:
+            try:
+                batch = next(val_iterator)
+            except StopIteration:
+                break
+            except Exception as e:
+                logger.error(f"Error fetching validation batch: {e}")
+                continue
+            
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**batch)
             
