@@ -157,7 +157,7 @@ def train_one_epoch(
                 print(f"[mem] step={global_step} alloc_mb={mem_alloc:.1f} reserved_mb={mem_res:.1f}")
 
         # ALWAYS LOG after each gradient accumulation step; also log first micro-batch for verification
-        should_log = ((batch_idx + 1) % args.gradient_accumulation_steps == 0) or (batch_idx == 0)
+        should_log = ((batch_idx + 1) % args.gradient_accumulation_steps == 0)
         
         if should_log:
             # Calculate current step loss (unscaled for gradient accumulation)
