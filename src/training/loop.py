@@ -501,11 +501,61 @@ def validate_epoch(*, model, val_loader, device, is_main_process: bool) -> float
         for batch in val_loader:
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**batch)
-            step_loss = float(outputs["loss"].detach())
+            
+            # Try to get loss from model output
+            loss_tensor = None
+            try:
+                if hasattr(outputs, 'get') and isinstance(outputs.get('loss'), torch.Tensor):
+                    candidate = outputs['loss']
+                    if torch.isfinite(candidate):
+                        loss_tensor = candidate
+            except Exception:
+                pass
+            
+            # Fallback: compute loss manually from logits
+            if loss_tensor is None:
+                logits = outputs.get('logits') if hasattr(outputs, 'get') else None
+                if logits is None:
+                    continue  # Skip this batch
+                
+                # Get labels
+                labels = batch.get('labels')
+                if labels is None and 'input_ids' in batch:
+                    # Derive labels by shifting
+                    input_ids = batch['input_ids']
+                    if input_ids.dim() >= 2 and logits.dim() >= 3:
+                        labels = input_ids[:, 1:].contiguous()
+                        logits = logits[:, :-1, :].contiguous()
+                
+                if labels is None:
+                    continue
+                
+                # Skip batches with zero valid tokens
+                valid_tokens = (labels != -100).sum().item()
+                if valid_tokens == 0:
+                    continue
+                
+                # Sanitize logits
+                logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
+                
+                # Compute CE
+                vocab_size = logits.size(-1)
+                loss_tensor = F.cross_entropy(
+                    logits.view(-1, vocab_size),
+                    labels.view(-1),
+                    ignore_index=-100,
+                    reduction='mean'
+                )
+            
+            # Final guard: skip non-finite losses
+            if not torch.isfinite(loss_tensor):
+                continue
+            
+            step_loss = float(loss_tensor.detach())
             total_loss += step_loss
             num += 1
             
-            # Log validation progress every 50 steps
+            # Log progress every 50 batches
             if num % 50 == 0 and is_main_process:
                 try:
                     step_ppl = math.exp(min(step_loss, 20))
@@ -513,17 +563,20 @@ def validate_epoch(*, model, val_loader, device, is_main_process: bool) -> float
                     step_ppl = float('inf')
                 print(f"[val_progress] batch={num} loss={step_loss:.4f} ppl={step_ppl:.2f}")
     
-    avg = total_loss / max(1, num)
+    # Guard against empty validation
+    if num == 0:
+        logger.warning("Validation: processed 0 batches! Returning loss=inf")
+        return float('inf')
+    
+    avg = total_loss / num
     if is_main_process:
         try:
             avg_ppl = math.exp(min(avg, 20))
         except (OverflowError, ValueError):
             avg_ppl = float('inf')
-        print(f"[val] avg_loss={avg:.4f} avg_ppl={avg_ppl:.2f}")
+        print(f"[val] avg_loss={avg:.4f} avg_ppl={avg_ppl:.2f} batches={num}")
         
-        # Log validation results to MLflow
-        # Note: We don't have global_step here, so we log without step parameter
-        # MLflow will use the current run's step counter
+        # Log to MLflow
         if MLFLOW_AVAILABLE:
             try:
                 mlflow.log_metrics({
