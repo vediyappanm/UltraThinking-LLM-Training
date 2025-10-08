@@ -1,6 +1,8 @@
+logger = logging.getLogger(__name__)
 import math
 import time
 import torch
+import logging
 from typing import Dict, Tuple, Optional
 
 try:
@@ -39,13 +41,13 @@ def train_one_epoch(
     start_time = time.time()
     last_step_time = time.time()
     
-    print(f"[DEBUG] Starting training loop, train_loader length estimate: {len(train_loader) if hasattr(train_loader, '__len__') else 'unknown'}")
-    print(f"[DEBUG] gradient_accumulation_steps: {args.gradient_accumulation_steps}")
+    logger.debug("Starting training loop, train_loader length estimate: %s", len(train_loader) if hasattr(train_loader, '__len__') else 'unknown')
+    logger.debug("gradient_accumulation_steps: %s", args.gradient_accumulation_steps)
     
     for batch_idx, batch in enumerate(train_loader):
         measured_grad_this_step = False
-        # DEBUG: Print EVERY batch to see loop execution
-        print(f"[DEBUG] Batch {batch_idx}: global_step={global_step}")
+        # DEBUG: per-batch visibility (hidden when logger level is INFO)
+        logger.debug("Batch %d: global_step=%d", batch_idx, global_step)
         
         batch = {k: v.to(device) for k, v in batch.items()}
         step_start = time.time()
@@ -147,7 +149,7 @@ def train_one_epoch(
 
         # ALWAYS LOG after each gradient accumulation step OR on first batch for visibility
         should_log = ((batch_idx + 1) % args.gradient_accumulation_steps == 0) or (batch_idx == 0)
-        print(f"[DEBUG] After batch {batch_idx}: (batch_idx+1)={batch_idx+1}, grad_accum={args.gradient_accumulation_steps}, should_log={should_log}")
+        logger.debug("After batch %d: (batch_idx+1)=%d, grad_accum=%d, should_log=%s", batch_idx, batch_idx+1, args.gradient_accumulation_steps, should_log)
         
         if should_log:
             # Calculate current step loss (unscaled for gradient accumulation)
@@ -171,12 +173,12 @@ def train_one_epoch(
             dre_metrics = {}
             aux_loss_value = 0.0
             
-            # CRITICAL DEBUG: Always print to confirm logging is working
-            print(f"[DEBUG] batch_idx={batch_idx}, global_step={global_step}, should_log={should_log}")
+            # CRITICAL DEBUG: confirm logging is working (hidden at INFO level)
+            logger.debug("batch_idx=%d, global_step=%d, should_log=%s", batch_idx, global_step, should_log)
             if hasattr(outputs, 'keys'):
-                print(f"[DEBUG] outputs keys: {list(outputs.keys())}")
+                logger.debug("outputs keys: %s", list(outputs.keys()))
             else:
-                print(f"[DEBUG] outputs type: {type(outputs)}")
+                logger.debug("outputs type: %s", type(outputs))
             
             # DRE metrics extraction
             if hasattr(outputs, 'get') and outputs.get('routing_info'):
