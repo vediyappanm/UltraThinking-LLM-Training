@@ -1,6 +1,6 @@
 # ULTRATHINK
 <p align="center">
-  <img src="docs/images/pp.jpg" alt="ULTRATHINK Logo" width="180" />
+  <img src="docs/images/pp.jpg" alt="ULTRATHINK Logo" width="250" />
 </p>
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/colab.ipynb)
