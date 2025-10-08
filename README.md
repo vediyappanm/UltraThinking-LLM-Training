@@ -1,15 +1,20 @@
 # ULTRATHINK
 <p align="center">
-  <img src="docs/images/pp.jpg" alt="ULTRATHINK Logo" width="250" />
+  <img src="docs/images/pp.jpg" alt="ULTRATHINK Logo" width="500" />
 </p>
+<div align="center">
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/vediyappanm/UltraThinking-LLM-Training/blob/main/deep/docs/colab.ipynb)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?logo=discord&logoColor=white)](https://discord.gg/ek2x9Rmk)
+[![Twitter](https://img.shields.io/badge/Twitter-Follow-1DA1F2?logo=x&logoColor=white)](https://x.com/UltraThinkLLM)
+
+</div>
 
 **Production-ready training framework for advanced Large Language Models**
 
-ULTRATHINK provides a complete, modular stack for training custom LLMs with state-of-the-art architectures, distributed training, and comprehensive monitoring.
+ULTRATHINK provides a complete, modular stack for training custom LLMs with state-of-the-art architectures, distributed training, and comprehensive monitoring. Built for researchers, engineers, and AI practitioners who want to train powerful language models with cutting-edge techniques.
 
 ## ✨ Key Features
 
@@ -195,6 +200,15 @@ docker run --gpus all \
 We welcome contributions! Please see:
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Guidelines and setup
 - **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** - Community standards
+
+## 🌐 Community & Support
+
+Join our growing community:
+
+- **💬 [Discord](https://discord.gg/ek2x9Rmk)** - Get help, share projects, discuss ideas
+- **🐦 [Twitter/X](https://x.com/UltraThinkLLM)** - Latest updates and announcements
+- **🐛 [GitHub Issues](https://github.com/vediyappanm/UltraThinking-LLM-Training/issues)** - Report bugs or request features
+- **💡 [Discussions](https://github.com/vediyappanm/UltraThinking-LLM-Training/discussions)** - Ask questions and share knowledge
 
 ## 📊 Model Specifications
 

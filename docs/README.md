@@ -1,8 +1,15 @@
 # ULTRATHINK Documentation
 
-This folder contains user and developer documentation for the ULTRATHINK project.
+<div align="center">
 
-Complete guides for training state-of-the-art language models.
+[![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?logo=discord&logoColor=white)](https://discord.gg/ek2x9Rmk)
+[![Twitter](https://img.shields.io/badge/Twitter-Follow-1DA1F2?logo=x&logoColor=white)](https://x.com/UltraThinkLLM)
+
+</div>
+
+Welcome to the ULTRATHINK documentation! This comprehensive guide will help you train state-of-the-art language models, from your first training run to production-scale deployments.
+
+> 💡 **New to ULTRATHINK?** Start with our [Getting Started Guide](getting_started.md) for a quick 5-minute introduction.
 
 ## Getting Started (5 minutes)
 
@@ -55,8 +62,21 @@ See [Testing Guide](../TESTING_GUIDE.md#monitoring--profiling) for details.
 | Run tests | `pytest` |
 | Clean cache | `python scripts/cleanup.py` |
 
-## Need Help?
+## 🌐 Community & Support
 
-- **Issues**: [GitHub Issues](https://github.com/vediyappanm/UltraThinking-LLM-Training/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/vediyappanm/UltraThinking-LLM-Training/discussions)
-- **FAQ**: [faq.md](faq.md) — Frequently asked questions
+Get help and connect with other ULTRATHINK users:
+
+- **💬 [Discord](https://discord.gg/ek2x9Rmk)** - Real-time chat, help, and discussions
+- **🐦 [Twitter/X](https://x.com/UltraThinkLLM)** - Updates, tips, and announcements
+- **🐛 [GitHub Issues](https://github.com/vediyappanm/UltraThinking-LLM-Training/issues)** - Bug reports and feature requests
+- **💡 [GitHub Discussions](https://github.com/vediyappanm/UltraThinking-LLM-Training/discussions)** - Q&A and community discussions
+- **📖 [FAQ](faq.md)** - Frequently asked questions and troubleshooting
+
+## 🚀 What's Next?
+
+After completing the getting started guide:
+
+1. **Experiment** with different model sizes and configurations
+2. **Join our Discord** to share your results and get feedback
+3. **Contribute** back to the project - we welcome PRs!
+4. **Follow us on Twitter** for the latest updates and best practices
