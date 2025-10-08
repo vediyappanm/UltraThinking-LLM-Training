@@ -1,8 +1,8 @@
+import logging
 logger = logging.getLogger(__name__)
 import math
 import time
 import torch
-import logging
 from typing import Dict, Tuple, Optional
 
 try:
