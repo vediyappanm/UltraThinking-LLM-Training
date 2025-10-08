@@ -487,6 +487,17 @@ class UltraThinkTrainer:
         total_loss = 0
         num_batches = 0
         
+        # Metrics tracking for step-by-step output
+        from collections import defaultdict
+        import math
+        step_metrics = {
+            'dre_paths': defaultdict(int),
+            'dre_complexities': [],
+            'dre_latencies': [],
+            'moe_metrics': {},
+            'losses': []
+        }
+        
         progress_bar = tqdm(
             self.train_loader,
             desc=f"Epoch {epoch}",
@@ -519,6 +530,22 @@ class UltraThinkTrainer:
                 else:
                     outputs = self.model(use_dre=use_dre_now, **batch)
                     loss = outputs['loss']
+                    
+                    # Collect metrics from outputs
+                    if 'dre_path' in outputs:
+                        step_metrics['dre_paths'][outputs['dre_path']] += 1
+                    if 'dre_complexity' in outputs:
+                        step_metrics['dre_complexities'].append(outputs['dre_complexity'])
+                    if 'dre_latency' in outputs:
+                        step_metrics['dre_latencies'].append(outputs['dre_latency'])
+                    if 'moe_used' in outputs:
+                        step_metrics['moe_metrics']['used'] = outputs['moe_used']
+                    if 'moe_aux_loss' in outputs:
+                        step_metrics['moe_metrics']['aux_loss'] = outputs['moe_aux_loss']
+                    if 'moe_load_balance' in outputs:
+                        step_metrics['moe_metrics']['load_balance'] = outputs['moe_load_balance']
+                    if 'moe_z_loss' in outputs:
+                        step_metrics['moe_metrics']['z_loss'] = outputs['moe_z_loss']
 
                 # Scale loss for gradient accumulation
                 loss = loss / self.args.gradient_accumulation_steps
@@ -557,6 +584,18 @@ class UltraThinkTrainer:
                     self.optimizer.zero_grad()
                     # Increment global optimizer step
                     self.global_step += 1
+                    
+                    # Print step summary
+                    if self.is_main_process():
+                        self._print_step_summary(self.global_step, step_metrics, total_loss / max(num_batches, 1))
+                        # Reset step metrics
+                        step_metrics = {
+                            'dre_paths': defaultdict(int),
+                            'dre_complexities': [],
+                            'dre_latencies': [],
+                            'moe_metrics': {},
+                            'losses': []
+                        }
             
             total_loss += loss.item()
             num_batches += 1
@@ -579,6 +618,62 @@ class UltraThinkTrainer:
                     logger.debug(f"MLflow logging skipped: {_e}")
         
         return total_loss / num_batches
+    
+    def _print_step_summary(self, step, metrics, avg_loss):
+        """Print formatted step summary with MoE and DRE metrics"""
+        import math
+        from datetime import datetime
+        
+        print(f"\n{'─'*90}")
+        print(f"⚡ STEP {step:4d} | {datetime.now().strftime('%H:%M:%S')}")
+        print(f"{'─'*90}")
+        
+        # Training metrics
+        ppl = math.exp(min(avg_loss, 20))  # Clip to avoid overflow
+        print(f"\n📈 Training:")
+        print(f"   Loss: {avg_loss:.4f}  |  Perplexity: {ppl:.2f}")
+        
+        # DRE metrics
+        if metrics['dre_paths'] or metrics['dre_complexities']:
+            total_routes = sum(metrics['dre_paths'].values())
+            if total_routes > 0:
+                print(f"\n🧠 Dynamic Reasoning Engine ({total_routes} batches):")
+                
+                # Path distribution with visual bars
+                for path, count in sorted(metrics['dre_paths'].items(), key=lambda x: x[1], reverse=True):
+                    pct = (count / total_routes) * 100
+                    bar_length = int(pct / 2)  # 50 chars max
+                    bar = '█' * bar_length + '░' * (50 - bar_length)
+                    print(f"   {path.upper():8s} [{bar}] {count:3d} ({pct:5.1f}%)")
+                
+                # Complexity stats
+                if metrics['dre_complexities']:
+                    complexities = metrics['dre_complexities']
+                    avg_c = sum(complexities) / len(complexities)
+                    print(f"   Complexity: {avg_c:.3f} (min: {min(complexities):.3f}, max: {max(complexities):.3f})")
+                
+                # Latency stats
+                if metrics['dre_latencies']:
+                    latencies = metrics['dre_latencies']
+                    avg_l = sum(latencies) / len(latencies)
+                    print(f"   Latency:    {avg_l:.1f}ms (min: {min(latencies):.1f}ms, max: {max(latencies):.1f}ms)")
+        
+        # MoE metrics
+        if metrics['moe_metrics']:
+            moe_used = metrics['moe_metrics'].get('used', False)
+            status_icon = "✓" if moe_used else "✗"
+            status_text = "Active" if moe_used else "Inactive"
+            print(f"\n🔀 Mixture of Experts: {status_icon} {status_text}")
+            
+            if moe_used:
+                if 'aux_loss' in metrics['moe_metrics']:
+                    print(f"   Aux Loss:      {metrics['moe_metrics']['aux_loss']:.4f}")
+                if 'load_balance' in metrics['moe_metrics']:
+                    print(f"   Load Balance:  {metrics['moe_metrics']['load_balance']:.4f}")
+                if 'z_loss' in metrics['moe_metrics']:
+                    print(f"   Z-Loss:        {metrics['moe_metrics']['z_loss']:.4f}")
+        
+        print(f"\n{'─'*90}")
     
     def validate(self):
         """Validate model"""
