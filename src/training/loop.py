@@ -138,8 +138,8 @@ def train_one_epoch(
                 mem_res = torch.cuda.memory_reserved() / (1024**2)
                 print(f"[mem] step={global_step} alloc_mb={mem_alloc:.1f} reserved_mb={mem_res:.1f}")
 
-        # ALWAYS LOG after each gradient accumulation step (simplified condition)
-        should_log = (batch_idx + 1) % args.gradient_accumulation_steps == 0
+        # ALWAYS LOG after each gradient accumulation step OR on first batch for visibility
+        should_log = ((batch_idx + 1) % args.gradient_accumulation_steps == 0) or (batch_idx == 0)
         print(f"[DEBUG] After batch {batch_idx}: (batch_idx+1)={batch_idx+1}, grad_accum={args.gradient_accumulation_steps}, should_log={should_log}")
         
         if should_log:
@@ -205,6 +205,13 @@ def train_one_epoch(
                             dre_metrics['main_path'] = f"{most_used_path[0]}({most_used_path[1]:.0f}%)"
                     if 'cache_hit_rate' in dre_info:
                         dre_metrics['cache_hit'] = dre_info['cache_hit_rate']
+            # Capture MoE usage flag even if no moe_info metrics are present
+            if hasattr(outputs, 'get') and outputs.get('routing_info'):
+                try:
+                    used_flag = bool(outputs['routing_info'].get('used_moe', False))
+                    moe_metrics['used_moe'] = used_flag
+                except Exception:
+                    pass
             
             if hasattr(outputs, 'get') and outputs.get('moe_info'):
                 moe_info = outputs['moe_info']
@@ -231,15 +238,43 @@ def train_one_epoch(
                 if 'aux_losses' in moe_info:
                     aux_losses = moe_info['aux_losses']
                     total_aux = 0.0
+                    lb_total = 0.0
+                    z_total = 0.0
+                    imp_total = 0.0
+                    ent_reg_total = 0.0
                     for key, loss_val in aux_losses.items():
+                        # Normalize tensor to float
                         if isinstance(loss_val, torch.Tensor):
-                            # Handle both scalar and multi-element tensors
-                            if loss_val.numel() == 1:
-                                total_aux += float(loss_val.detach())
-                            else:
-                                total_aux += float(loss_val.detach().mean())
+                            val = float(loss_val.detach().mean()) if loss_val.numel() > 1 else float(loss_val.detach())
+                        else:
+                            try:
+                                val = float(loss_val)
+                            except Exception:
+                                val = 0.0
+                        # Only include recognized loss terms in totals
+                        if 'load_loss' in key:
+                            lb_total += val
+                            total_aux += val
+                        elif 'z_loss' in key:
+                            z_total += val
+                            total_aux += val
+                        elif 'importance_loss' in key:
+                            imp_total += val
+                            total_aux += val
+                        elif 'entropy_reg_loss' in key:
+                            ent_reg_total += val
+                            total_aux += val
                     aux_loss_value = total_aux
                     moe_metrics['aux_loss'] = aux_loss_value
+                    # Record aggregated components for detailed logging
+                    if lb_total > 0:
+                        moe_metrics['lb'] = lb_total
+                    if z_total > 0:
+                        moe_metrics['z'] = z_total
+                    if imp_total > 0:
+                        moe_metrics['imp'] = imp_total
+                    if ent_reg_total > 0:
+                        moe_metrics['ent_reg'] = ent_reg_total
             
             # Log loss, perplexity, throughput, MoE and DRE metrics to console
             moe_str = ""
@@ -251,6 +286,17 @@ def train_one_epoch(
                     moe_parts.append(f"max_exp={moe_metrics['max_expert_pct']:.1f}%")
                 if 'aux_loss' in moe_metrics and moe_metrics['aux_loss'] > 0:
                     moe_parts.append(f"aux={moe_metrics['aux_loss']:.4f}")
+                # Detailed aux components if available
+                if 'lb' in moe_metrics:
+                    moe_parts.append(f"lb={moe_metrics['lb']:.4f}")
+                if 'z' in moe_metrics:
+                    moe_parts.append(f"z={moe_metrics['z']:.4f}")
+                if 'imp' in moe_metrics:
+                    moe_parts.append(f"imp={moe_metrics['imp']:.4f}")
+                if 'ent_reg' in moe_metrics:
+                    moe_parts.append(f"ent_reg={moe_metrics['ent_reg']:.4f}")
+                if 'used_moe' in moe_metrics:
+                    moe_parts.append(f"used_moe={moe_metrics['used_moe']}")
                 if moe_parts:
                     moe_str = f" moe=[{','.join(moe_parts)}]"
             
@@ -334,6 +380,46 @@ def train_one_epoch(
                 profiler.step()
             except Exception:
                 pass
+
+    # If the epoch ended with leftover grads (not an exact multiple of grad_accum),
+    # perform a final optimizer step so progress still increments.
+    try:
+        if (num_batches % max(1, int(getattr(args, "gradient_accumulation_steps", 1)))) != 0 and optimizer is not None and not _is_deepspeed_engine(model):
+            # Gradient clipping
+            if getattr(args, "gradient_clipping", 0) > 0:
+                if scaler is not None:
+                    scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.gradient_clipping)
+            # Optimizer step
+            if scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+            global_step += 1
+
+            # Emit a final step line using the last computed metric strings if available
+            try:
+                step_loss = float(loss.detach()) * args.gradient_accumulation_steps
+                try:
+                    perplexity = math.exp(min(step_loss, 20))
+                except (OverflowError, ValueError):
+                    perplexity = float('inf')
+                # Reuse previously built strings if present; otherwise compute minimal ones
+                if 'moe_str' not in locals():
+                    moe_str = ""
+                if 'dre_str' not in locals():
+                    dre_str = ""
+                if 'grad_str' not in locals():
+                    grad_str = ""
+                print(f"[step] step={global_step} loss={step_loss:.4f} ppl={perplexity:.2f} toks/s=0.0{moe_str}{dre_str}{grad_str}")
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     epoch_time = time.time() - start_time
     avg_loss = total_loss / max(1, num_batches)
