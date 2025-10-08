@@ -8,7 +8,7 @@ import sys
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler, IterableDataset
 from torch.cuda.amp import GradScaler, autocast
 import mlflow
 from tqdm import tqdm
@@ -449,22 +449,27 @@ class UltraThinkTrainer:
         train_sampler = DistributedSampler(train_dataset) if is_dist else None
         val_sampler = DistributedSampler(val_dataset) if is_dist else None
         
-        # Streaming datasets should use single-worker and not drop the last batch
-        is_streaming_ds = hasattr(train_dataset, 'config') and getattr(train_dataset.config, 'streaming', False)
-        optimal_workers = 0 if is_streaming_ds else min(self.args.num_workers * 2, 6)  # 2x workers, max 6
-        prefetch_kwargs = {'prefetch_factor': 4} if optimal_workers > 0 else {}
+        # Streaming/iterable datasets must use single worker without prefetch
+        is_streaming_ds = (
+            isinstance(train_dataset, IterableDataset)
+            or hasattr(train_dataset, 'config') and getattr(train_dataset.config, 'streaming', False)
+        )
+        optimal_workers = 0 if is_streaming_ds else min(max(self.args.num_workers, 0) * 2, 6)  # 2x workers, max 6
 
-        self.train_loader = DataLoader(
-            train_dataset,
+        loader_kwargs = dict(
+            dataset=train_dataset,
             batch_size=self.args.batch_size,
             sampler=train_sampler,
             shuffle=(train_sampler is None),
             num_workers=optimal_workers,
-            pin_memory=False,  # Disable pin_memory on CPU
+            pin_memory=False,
             persistent_workers=True if optimal_workers > 0 else False,
             drop_last=False if is_streaming_ds else True,
-            **prefetch_kwargs
         )
+        if optimal_workers > 0:
+            loader_kwargs['prefetch_factor'] = 4
+
+        self.train_loader = DataLoader(**loader_kwargs)
         
         self.val_loader = DataLoader(
             val_dataset,
