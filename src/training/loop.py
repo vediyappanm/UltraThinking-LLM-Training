@@ -285,7 +285,20 @@ def train_one_epoch(
                     if ent_reg_total > 0:
                         moe_metrics['ent_reg'] = ent_reg_total
             
-            # Log loss, perplexity, throughput, MoE and DRE metrics to console
+            # Extract optional component losses
+            comp_str = ""
+            if hasattr(outputs, 'get'):
+                try:
+                    if outputs.get('lm_loss') is not None:
+                        comp_str += f" lm={float(outputs['lm_loss']):.4f}"
+                    # Component-wise aux losses
+                    for k in ['load_balance_loss','z_loss','importance_loss','entropy_reg_loss']:
+                        if outputs.get(k) is not None:
+                            comp_str += f" {k.split('_')[0]}={float(outputs[k]):.4f}"
+                except Exception:
+                    pass
+
+            # Log loss, perplexity, throughput, component/MoE and DRE metrics to console
             moe_str = ""
             if moe_metrics:
                 moe_parts = []

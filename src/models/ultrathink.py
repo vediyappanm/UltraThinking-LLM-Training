@@ -329,12 +329,48 @@ class UltraThinkCore(nn.Module):
                 shift_labels.view(-1)
             )
             
-            # Add auxiliary losses
+            # Base loss
             loss = lm_loss
-            
-            if self.moe_layers and 'total_aux_loss' in locals():
-                loss = loss + self.config.moe_config.aux_loss_weight * total_aux_loss
-            
+
+            # Aggregate MoE auxiliary loss components across layers (unweighted sums)
+            moe_lb_loss = None
+            moe_z_loss = None
+            moe_importance_loss = None
+            moe_entropy_reg_loss = None
+            moe_layers_count = 0
+
+            if self.moe_layers:
+                # Iterate again over layers' info to accumulate raw components
+                for layer_idx_str, moe_layer in self.moe_layers.items():
+                    if hasattr(moe_layer, 'last_moe_info') and moe_layer.last_moe_info:
+                        aux_losses = moe_layer.last_moe_info.get('aux_losses') or {}
+                        # Initialize tensors lazily on first seen device
+                        def _init_if_none(x):
+                            return x if x is not None else torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
+                        if isinstance(aux_losses, dict):
+                            moe_lb_loss = _init_if_none(moe_lb_loss) + aux_losses.get('load_loss', torch.tensor(0.0, device=hidden_states.device))
+                            moe_z_loss = _init_if_none(moe_z_loss) + aux_losses.get('z_loss', torch.tensor(0.0, device=hidden_states.device))
+                            moe_importance_loss = _init_if_none(moe_importance_loss) + aux_losses.get('importance_loss', torch.tensor(0.0, device=hidden_states.device))
+                            moe_entropy_reg_loss = _init_if_none(moe_entropy_reg_loss) + aux_losses.get('entropy_reg_loss', torch.tensor(0.0, device=hidden_states.device))
+                            moe_layers_count += 1
+
+            # Average across MoE layers if any
+            if moe_layers_count > 0:
+                moe_lb_loss = moe_lb_loss / moe_layers_count
+                moe_z_loss = moe_z_loss / moe_layers_count
+                moe_importance_loss = moe_importance_loss / moe_layers_count
+                moe_entropy_reg_loss = moe_entropy_reg_loss / moe_layers_count
+
+                # Apply configured weights to each component (Switch Transformers style)
+                mc = self.config.moe_config
+                weighted_aux = (
+                    mc.load_balance_weight * moe_lb_loss
+                    + mc.z_loss_weight * moe_z_loss
+                    + mc.importance_weight * moe_importance_loss
+                    + mc.entropy_reg_weight * moe_entropy_reg_loss
+                )
+                loss = loss + weighted_aux
+
             if constitutional_info and 'constitutional_loss' in constitutional_info:
                 loss = loss + self.config.constitutional_weight * constitutional_info['constitutional_loss']
 
@@ -352,6 +388,7 @@ class UltraThinkCore(nn.Module):
         # Compile comprehensive output
         outputs = {
             'loss': loss,
+            'lm_loss': lm_loss if 'lm_loss' in locals() else None,
             'logits': logits,
             'hidden_states': hidden_states,
             'value': value,
@@ -360,15 +397,25 @@ class UltraThinkCore(nn.Module):
         # Add component-specific outputs
         if 'routing_info' in locals() and routing_info is not None:
             outputs['routing_info'] = routing_info
-        
         if constitutional_info:
             outputs['constitutional_info'] = constitutional_info
         
         if self.moe_layers:
-            outputs['moe_aux_loss'] = total_aux_loss if 'total_aux_loss' in locals() else None
+            # Legacy combined aux for backward-compat (post-weighted if available)
+            if 'weighted_aux' in locals():
+                outputs['moe_aux_loss'] = weighted_aux
+            elif 'total_aux_loss' in locals():
+                outputs['moe_aux_loss'] = total_aux_loss
+            # Add component-wise aux losses if computed
+            if 'moe_lb_loss' in locals() and moe_layers_count > 0:
+                outputs['lm_loss'] = lm_loss
+                outputs['load_balance_loss'] = moe_lb_loss
+                outputs['z_loss'] = moe_z_loss
+                outputs['importance_loss'] = moe_importance_loss
+                outputs['entropy_reg_loss'] = moe_entropy_reg_loss
             if 'moe_info' in locals() and moe_info:
                 outputs['moe_info'] = moe_info
-        
+
         return outputs
 
 
