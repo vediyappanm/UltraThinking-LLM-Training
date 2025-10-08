@@ -43,6 +43,7 @@ def train_one_epoch(
     print(f"[DEBUG] gradient_accumulation_steps: {args.gradient_accumulation_steps}")
     
     for batch_idx, batch in enumerate(train_loader):
+        measured_grad_this_step = False
         # DEBUG: Print EVERY batch to see loop execution
         print(f"[DEBUG] Batch {batch_idx}: global_step={global_step}")
         
@@ -122,6 +123,7 @@ def train_one_epoch(
                         current_router_grad_norm = router_sq ** 0.5
                         if current_total_grad_norm > effective_max_norm * 1.01:
                             print(f"[ERROR] Clipping failed! norm={current_total_grad_norm:.2f} max={effective_max_norm:.2f}")
+                        measured_grad_this_step = True
                         
                     # Optimizer step
                     if scaler is not None:
