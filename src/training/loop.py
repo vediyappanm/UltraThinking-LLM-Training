@@ -1,9 +1,10 @@
-logger = logging.getLogger(__name__)
+import logging
 import math
 import time
 import torch
-import logging
 from typing import Dict, Tuple, Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     import mlflow

@@ -8,7 +8,7 @@ import sys
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler, IterableDataset
 from torch.cuda.amp import GradScaler, autocast
 import mlflow
 from tqdm import tqdm
