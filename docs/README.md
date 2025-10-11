@@ -27,10 +27,19 @@ Start here if you're new to ULTRATHINK:
 ## Reference
 
 - **[Model Card](../MODEL_CARD.md)** - Architecture specifications and limitations
+- **[Benchmarks](BENCHMARKS.md)** - Performance metrics and results
+- **[Framework Comparison](COMPARISON.md)** - vs GPT-NeoX, Megatron-LM, Axolotl
+- **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues and solutions
 - **[Testing Guide](../TESTING_GUIDE.md)** - Running and writing tests
 - **[Development](development.md)** - Code structure and contributing
 - **[Evaluation](evaluation.md)** - Benchmarking your models
 - **[FAQ](faq.md)** - Common questions and solutions
+
+## Planning & Community
+
+- **[Roadmap](ROADMAP.md)** - Future plans and features
+- **[Marketing Guide](MARKETING_GUIDE.md)** - Promotion strategy
+- **[Quick Start Promotion](QUICK_START_PROMOTION.md)** - 7-day launch plan
 
 ## Monitoring & Tools
 
