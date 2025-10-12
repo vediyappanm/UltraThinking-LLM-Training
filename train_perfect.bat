@@ -1,0 +1,110 @@
+@echo off
+REM ============================================================================
+REM ULTRATHINK Perfect Training Script (Windows)
+REM ============================================================================
+REM Fixes: Routing collapse, high perplexity, auxiliary loss issues
+REM Optimized for: Small-scale model (512 hidden, 6 layers) on single GPU
+REM ============================================================================
+
+echo ========================================
+echo ULTRATHINK Perfect Training
+echo ========================================
+
+REM Check if train_ultrathink.py exists
+if not exist "train_ultrathink.py" (
+    echo Error: train_ultrathink.py not found!
+    echo Please run this script from the project root directory.
+    exit /b 1
+)
+
+REM Check GPU availability
+where nvidia-smi >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo GPU detected:
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+) else (
+    echo Warning: No GPU detected. Training will be slow on CPU.
+)
+
+REM Create output directory
+if not exist ".\outputs\ultrathink_fixed" mkdir ".\outputs\ultrathink_fixed"
+
+echo Starting training with optimized configuration...
+echo.
+
+REM ============================================================================
+REM MAIN TRAINING COMMAND - PERFECT CONFIGURATION
+REM ============================================================================
+
+python train_ultrathink.py ^
+  --vocab_size 50257 ^
+  --hidden_size 512 ^
+  --num_layers 6 ^
+  --num_heads 8 ^
+  --num_kv_heads 4 ^
+  --intermediate_size 2048 ^
+  --max_seq_length 256 ^
+  --activation swiglu ^
+  --enable_moe ^
+  --num_knowledge_experts 4 ^
+  --num_skill_experts 2 ^
+  --num_meta_experts 1 ^
+  --num_safety_experts 1 ^
+  --moe_top_k 2 ^
+  --expert_capacity 1.5 ^
+  --load_balance_weight 0.1 ^
+  --z_loss_weight 0.0001 ^
+  --importance_weight 0.05 ^
+  --batch_size 2 ^
+  --gradient_accumulation_steps 32 ^
+  --learning_rate 0.0001 ^
+  --weight_decay 0.1 ^
+  --adam_beta1 0.9 ^
+  --adam_beta2 0.999 ^
+  --warmup_steps 1000 ^
+  --max_steps 100000 ^
+  --num_epochs 1 ^
+  --gradient_clipping 0.5 ^
+  --dropout 0.15 ^
+  --attention_dropout 0.15 ^
+  --gradient_checkpointing ^
+  --use_amp ^
+  --amp_warmup_steps 500 ^
+  --enable_dre ^
+  --dre_warmup_steps 1000 ^
+  --dataset c4 ^
+  --dataset_subset en ^
+  --tokenizer_name gpt2 ^
+  --streaming ^
+  --train_samples 10000 ^
+  --val_samples 1000 ^
+  --num_workers 2 ^
+  --use_mlflow ^
+  --mlflow_tracking_uri "file:./mlruns" ^
+  --mlflow_experiment "UltraThinking-LLM-Training" ^
+  --run_name "ultrathink_fixed_routing_v2" ^
+  --perf_log_interval 5 ^
+  --eval_frequency 50 ^
+  --output_dir "./outputs/ultrathink_fixed"
+
+if %ERRORLEVEL% EQU 0 (
+    echo.
+    echo ========================================
+    echo Training completed successfully!
+    echo ========================================
+    echo.
+    echo Output directory: .\outputs\ultrathink_fixed
+    echo MLflow logs: .\mlruns
+    echo.
+    echo To view training metrics:
+    echo   mlflow ui --backend-store-uri ./mlruns --port 5000
+    echo.
+) else (
+    echo.
+    echo ========================================
+    echo Training failed!
+    echo ========================================
+    echo.
+    echo Check the logs above for error details.
+    exit /b 1
+)
