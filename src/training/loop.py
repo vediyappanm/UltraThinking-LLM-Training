@@ -127,6 +127,81 @@ def train_one_epoch(
                         if current_total_grad_norm > effective_max_norm * 1.01:
                             print(f"[ERROR] Clipping failed! norm={current_total_grad_norm:.2f} max={effective_max_norm:.2f}")
                         measured_grad_this_step = True
+
+                    # Diagnostics: Gradient norms by component (first 10 steps)
+                    if global_step < 10:
+                        try:
+                            comp_sq = {
+                                'embedding': 0.0,
+                                'attention': 0.0,
+                                'experts': 0.0,
+                                'router': 0.0,
+                                'output': 0.0,
+                            }
+                            expert_param_grads = []
+                            router_param_norms = []
+                            for name, param in model.named_parameters():
+                                if param.grad is None:
+                                    continue
+                                g = float(param.grad.data.norm(2).item())
+                                lname = name.lower()
+                                if ('embedding' in lname) or ('wte' in lname) or ('wpe' in lname):
+                                    comp_sq['embedding'] += g * g
+                                elif ('router' in lname) or ('gate' in lname):
+                                    comp_sq['router'] += g * g
+                                elif ('expert' in lname) or ('experts' in lname) or ('moe' in lname):
+                                    comp_sq['experts'] += g * g
+                                elif ('attn' in lname) or ('attention' in lname):
+                                    comp_sq['attention'] += g * g
+                                elif ('lm_head' in lname) or ('output' in lname):
+                                    comp_sq['output'] += g * g
+                                # Collect expert grads for top listing
+                                if (('expert' in lname) or ('experts' in lname)) and g > 0:
+                                    expert_param_grads.append((name, g))
+                                # Collect router param norms
+                                if (('router' in lname) or ('gate' in lname)):
+                                    try:
+                                        router_param_norms.append((name, float(param.data.norm(2).item())))
+                                    except Exception:
+                                        pass
+                            comp_norms = {k: (v ** 0.5) for k, v in comp_sq.items()}
+                            total_comp_norm = (sum(v for v in comp_sq.values())) ** 0.5
+                            print("[diag] grad_norms:",
+                                  f"embedding={comp_norms['embedding']:.4f}",
+                                  f"attention={comp_norms['attention']:.4f}",
+                                  f"experts={comp_norms['experts']:.4f}",
+                                  f"router={comp_norms['router']:.4f}",
+                                  f"output={comp_norms['output']:.4f}",
+                                  f"total={total_comp_norm:.4f}")
+                            if expert_param_grads:
+                                expert_param_grads.sort(key=lambda x: x[1], reverse=True)
+                                topk = expert_param_grads[:10]
+                                print("[diag] top_expert_grads:")
+                                for n, g in topk:
+                                    print(f"        {n}: {g:.6f}")
+                            if router_param_norms:
+                                router_param_norms.sort(key=lambda x: x[1], reverse=True)
+                                topk_r = router_param_norms[:5]
+                                print("[diag] router_param_norms:")
+                                for n, pn in topk_r:
+                                    print(f"        {n}: {pn:.6f}")
+                            # Logit statistics if available
+                            try:
+                                if hasattr(outputs, 'get') and outputs.get('logits') is not None:
+                                    logits = outputs['logits']
+                                    m = float(logits.mean().detach().cpu().item())
+                                    s = float(logits.std().detach().cpu().item())
+                                    mn = float(logits.min().detach().cpu().item())
+                                    mx = float(logits.max().detach().cpu().item())
+                                    print(f"[diag] logits: mean={m:.4f} std={s:.4f} min={mn:.4f} max={mx:.4f}")
+                                    if s < 0.1:
+                                        print("[diag] WARN: logits std < 0.1 (low variance)")
+                                    if abs(m) > 10.0:
+                                        print("[diag] WARN: logits mean magnitude > 10 (extreme)")
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
                         
                     # Optimizer step
                     if scaler is not None:
@@ -383,7 +458,12 @@ def train_one_epoch(
                     grad_str += f",router={current_router_grad_norm:.3f}"
                 grad_str += "]"
             
-            print(f"[step] step={global_step} loss={step_loss:.4f} ppl={perplexity:.2f} toks/s={toks_per_sec:.1f}{moe_str}{dre_str}{grad_str}")
+            # Learning rate display
+            try:
+                curr_lr = float(scheduler.get_last_lr()[0]) if scheduler is not None else 0.0
+            except Exception:
+                curr_lr = 0.0
+            print(f"[step] step={global_step} loss={step_loss:.4f} ppl={perplexity:.2f} toks/s={toks_per_sec:.1f} lr={curr_lr:.6g}{moe_str}{dre_str}{grad_str}")
             
             # Log to MLflow if available and enabled
             if MLFLOW_AVAILABLE and getattr(args, "use_mlflow", False):
