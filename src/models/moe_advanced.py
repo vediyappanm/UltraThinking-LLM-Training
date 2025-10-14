@@ -73,17 +73,22 @@ class NoisyTopKRouter(nn.Module):
         self.noise_std = noise_std
         
         # Router network - use float32
-        # Router gate with proper initialization
-        self.gate = nn.Linear(hidden_dim, num_experts, bias=False, dtype=torch.float32)
-        # Initialize with small uniform weights to encourage balanced routing
+        # Router gate with BALANCED initialization for immediate load balancing
+        self.gate = nn.Linear(hidden_dim, num_experts, bias=True, dtype=torch.float32)
+        
+        # CRITICAL: Initialize router to start nearly uniform from step 0
         with torch.no_grad():
-            self.gate.weight.uniform_(-0.01, 0.01)
+            # Very small random weights - near zero input dependence initially
+            self.gate.weight.uniform_(-0.001, 0.001)
+            # Initialize bias to encourage uniform distribution
+            # All biases start equal -> uniform softmax from step 0
+            self.gate.bias.zero_()
         
         # Learnable noise parameters
         self.noise_linear = nn.Linear(hidden_dim, num_experts, dtype=torch.float32)
         # Initialize noise layer with small weights
         with torch.no_grad():
-            self.noise_linear.weight.uniform_(-0.005, 0.005)  # Even smaller for noise
+            self.noise_linear.weight.uniform_(-0.001, 0.001)  # Very small for stability
         
     @torchdynamo_disable
     def forward(
@@ -107,22 +112,23 @@ class NoisyTopKRouter(nn.Module):
             # Router logits with VERY small initialization already applied
             raw_logits = self.gate(hs_fp32)  # [B*S, E]
             
-            # OPTIMIZED: Stable routing with controlled randomness
+            # BALANCED ROUTING: Force exploration and prevent collapse
             if training:
-                # Add Gumbel noise only during training for exploration
-                # Use lower temperature for more stable routing
+                # Add strong Gumbel noise for exploration (especially important for small expert counts)
                 gumbel_noise = -torch.log(-torch.log(torch.rand_like(raw_logits) + 1e-10) + 1e-10)
-                temperature = 1.0  # Lower temperature = more deterministic
-                logits = (raw_logits + gumbel_noise * 0.1) / temperature
+                # Higher temperature for small expert counts to force diversity
+                temperature = max(1.0, 8.0 / self.num_experts)  # Adaptive temperature
+                logits = (raw_logits + gumbel_noise * 0.5) / temperature
             else:
                 logits = raw_logits
             
             # Compute softmax probabilities
             scores = F.softmax(logits, dim=-1)
             
-            # STABLE: Gentle minimum probability to prevent expert collapse
-            # For top_k=2, minimum should be very small to allow natural selection
-            min_prob = 0.001  # 0.1% minimum per expert
+            # ADAPTIVE: Minimum probability scales with expert count
+            # Smaller expert pools need higher minimums to prevent collapse
+            # For 8 experts: min_prob = 0.05 (5%), for 64 experts: min_prob = 0.006 (0.6%)
+            min_prob = max(0.001, 0.4 / self.num_experts)
             scores = scores * (1 - min_prob * self.num_experts) + min_prob
             scores = scores / scores.sum(dim=-1, keepdim=True)  # Renormalize
             
@@ -200,15 +206,19 @@ class NoisyTopKRouter(nn.Module):
             importance_loss = importance_variance / (importance_mean ** 2 + 1e-10)
             importance_loss = importance_loss.clamp(min=0.0, max=1.0)
             
-            # Entropy regularization - maintain balanced routing
+            # Entropy regularization - CRITICAL for small expert counts
             routing_entropy = -torch.sum(scores_fp32 * torch.log(scores_fp32 + 1e-10), dim=-1).mean()
             max_entropy = torch.log(torch.tensor(float(self.num_experts), device=scores.device, dtype=torch.float32))
             
             # Normalized entropy (0 to 1, where 1 is perfect balance)
-            normalized_entropy = routing_entropy / max_entropy
+            normalized_entropy = routing_entropy / (max_entropy + 1e-10)
+            
+            # ADAPTIVE: Stronger penalty for smaller expert counts
+            # Small pools collapse more easily, need stronger regularization
+            entropy_strength = min(10.0, 20.0 / self.num_experts)
             # Loss increases as entropy decreases (encourage high entropy)
-            entropy_reg_loss = (1.0 - normalized_entropy) * 5.0
-            entropy_reg_loss = entropy_reg_loss.clamp(min=0.0, max=5.0)
+            entropy_reg_loss = (1.0 - normalized_entropy) * entropy_strength
+            entropy_reg_loss = entropy_reg_loss.clamp(min=0.0, max=10.0)
             
             # Z-loss: router logit regularization (prevent extreme values)
             router_logits_squared = torch.logsumexp(scores_fp32, dim=-1) ** 2
