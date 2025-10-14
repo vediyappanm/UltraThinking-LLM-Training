@@ -421,18 +421,18 @@ class HierarchicalMoE(nn.Module):
             for i in range(config.num_safety_experts)
         ])
         
-        # Routers for each level
+        # Routers for each level with warmup for balanced initialization
         self.knowledge_router = NoisyTopKRouter(
-            hidden_dim, config.num_knowledge_experts, config.top_k
+            hidden_dim, config.num_knowledge_experts, config.top_k, warmup_steps=100
         )
         self.skill_router = NoisyTopKRouter(
-            hidden_dim, config.num_skill_experts, config.top_k
+            hidden_dim, config.num_skill_experts, config.top_k, warmup_steps=100
         )
         self.meta_router = NoisyTopKRouter(
-            hidden_dim, config.num_meta_experts, config.top_k
+            hidden_dim, config.num_meta_experts, config.top_k, warmup_steps=100
         )
         self.safety_router = NoisyTopKRouter(
-            hidden_dim, config.num_safety_experts, min(config.top_k, config.num_safety_experts)
+            hidden_dim, config.num_safety_experts, min(config.top_k, config.num_safety_experts), warmup_steps=100
         )
         
         # Cross-expert attention for consultation
