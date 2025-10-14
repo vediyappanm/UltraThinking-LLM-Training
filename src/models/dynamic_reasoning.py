@@ -1,7 +1,4 @@
-"""
-Dynamic Reasoning Engine (DRE) for Adaptive Multi-Path Inference
-Implements Claude 4 / GPT-5 style adaptive reasoning with complexity scoring
-"""
+
 
 import torch
 import torch.nn as nn

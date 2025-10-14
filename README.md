@@ -161,7 +161,7 @@ python tests/smoke_test.py
 ## 📚 Documentation
 
 ### 🚀 Getting Started
-- **[Training Quickstart](TRAINING_QUICKSTART.md)** - Get started in 5 minutes
+- **[Training Quickstart](docs/TRAINING_QUICKSTART.md)** - Get started in 5 minutes
 - **[Advanced Training Guide](ADVANCED_TRAINING_GUIDE.md)** - Deep dive into all features
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
 - **[Google Colab](docs/colab.md)** - Train in the cloud for free
@@ -169,11 +169,11 @@ python tests/smoke_test.py
 ### 📊 Performance & Comparisons
 - **[Benchmarks](docs/BENCHMARKS.md)** - Performance metrics and results
 - **[Framework Comparison](docs/COMPARISON.md)** - vs GPT-NeoX, Megatron-LM, Axolotl
-- **[Model Card](MODEL_CARD.md)** - Model specifications
+- **[Model Card](docs/MODEL_CARD.md)** - Model specifications
 
 ### 🏗️ Architecture & Development
 - **[Architecture Overview](ARCHITECTURE_OVERVIEW.md)** - Visual system diagrams
-- **[Project Structure](PROJECT_STRUCTURE.md)** - Understanding the codebase
+- **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Understanding the codebase
 - **[Roadmap](docs/ROADMAP.md)** - Future plans and features
 
 ### 📖 Training Guides
