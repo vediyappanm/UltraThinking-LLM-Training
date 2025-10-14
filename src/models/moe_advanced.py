@@ -120,28 +120,38 @@ class NoisyTopKRouter(nn.Module):
             # Calculate warmup factor (1.0 at start, 0.0 after warmup)
             warmup_factor = max(0.0, 1.0 - self._forward_count.item() / max(self.warmup_steps, 1))
 
-            # Router logits with ZERO initialization
-            raw_logits = self.gate(hs_fp32)  # [B*S, E]
-            
-            # WARMUP: Start with nearly uniform, gradually allow learning
-            if training and warmup_factor > 0:
-                # During warmup, force nearly uniform distribution
-                # Strong noise dominates, logits contribute minimally
-                gumbel_noise = -torch.log(-torch.log(torch.rand_like(raw_logits) + 1e-10) + 1e-10)
-                # Very high temperature during warmup for uniform distribution
-                temperature = 10.0 * warmup_factor + 1.0 * (1 - warmup_factor)
-                logits = (raw_logits * (1 - warmup_factor) + gumbel_noise) / temperature
-            elif training:
-                # After warmup: normal Gumbel-Softmax with exploration
-                gumbel_noise = -torch.log(-torch.log(torch.rand_like(raw_logits) + 1e-10) + 1e-10)
-                # Adaptive temperature for small expert counts
-                temperature = max(1.0, 8.0 / self.num_experts)
-                logits = (raw_logits + gumbel_noise * 0.3) / temperature
+            # AGGRESSIVE WARMUP FIX: Force truly uniform distribution during early steps
+            if training and warmup_factor > 0.5:
+                # During first 50 steps: PURE UNIFORM + small random noise
+                # This guarantees balanced routing from step 0
+                uniform_scores = torch.ones_like(
+                    torch.zeros(batch_size * seq_len, self.num_experts, device=hs_fp32.device)
+                ) / self.num_experts
+                
+                # Add tiny random perturbations to break ties
+                random_noise = torch.randn_like(uniform_scores) * 0.01
+                scores = uniform_scores + random_noise
+                scores = F.softmax(scores / 0.1, dim=-1)  # Low temp for nearly uniform
+                
             else:
-                logits = raw_logits
-            
-            # Compute softmax probabilities
-            scores = F.softmax(logits, dim=-1)
+                # After warmup threshold: use learned routing
+                raw_logits = self.gate(hs_fp32)  # [B*S, E]
+                
+                if training and warmup_factor > 0:
+                    # Gradual transition phase (steps 50-100)
+                    gumbel_noise = -torch.log(-torch.log(torch.rand_like(raw_logits) + 1e-10) + 1e-10)
+                    temperature = 5.0 * warmup_factor + 1.0 * (1 - warmup_factor)
+                    logits = (raw_logits * (1 - warmup_factor) + gumbel_noise) / temperature
+                elif training:
+                    # After warmup: normal routing with exploration
+                    gumbel_noise = -torch.log(-torch.log(torch.rand_like(raw_logits) + 1e-10) + 1e-10)
+                    temperature = max(1.0, 8.0 / self.num_experts)
+                    logits = (raw_logits + gumbel_noise * 0.3) / temperature
+                else:
+                    logits = raw_logits
+                
+                # Compute softmax probabilities
+                scores = F.softmax(logits, dim=-1)
             
             # ADAPTIVE: Minimum probability scales with expert count
             # For 8 experts: min_prob = 0.05 (5%), for 64 experts: min_prob = 0.006 (0.6%)

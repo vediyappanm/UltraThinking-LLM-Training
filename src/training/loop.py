@@ -230,19 +230,53 @@ def train_one_epoch(
                 if 'expert_utilization' in moe_info:
                     util = moe_info['expert_utilization']
                     
-                    # Key metrics for console display
                     if 'avg_routing_entropy' in util:
                         moe_metrics['entropy'] = util['avg_routing_entropy']
                     
-                    # Check for expert collapse (top expert getting >80% of traffic)
                     max_concentration = 0
+                    max_concentration_multi = 0
+                    max_ratio = 0.0
+                    k_ratio = None
+                    s_ratio = None
+                    num_used = moe_info.get('num_experts_used', {})
                     for expert_type in ['knowledge', 'skill', 'meta', 'safety']:
                         key = f"{expert_type}_top_expert_pct"
                         if key in util:
-                            max_concentration = max(max_concentration, util[key])
-                    
+                            val = util[key]
+                            if val > max_concentration:
+                                max_concentration = val
+                            n = num_used.get(expert_type, 0)
+                            if n and n > 1 and val > max_concentration_multi:
+                                max_concentration_multi = val
+                            # Compute ideal top expert percentage for this group
+                            try:
+                                n_int = int(n)
+                            except Exception:
+                                n_int = 0
+                            if n_int > 0:
+                                ideal_pct = 100.0 * float(min(getattr(args, 'moe_top_k', 2), n_int)) / float(n_int)
+                                if ideal_pct > 0:
+                                    ratio = float(val) / float(ideal_pct)
+                                    if ratio > max_ratio:
+                                        max_ratio = ratio
+                                    if expert_type == 'knowledge':
+                                        k_ratio = ratio
+                                    if expert_type == 'skill':
+                                        s_ratio = ratio
                     if max_concentration > 0:
                         moe_metrics['max_expert_pct'] = max_concentration
+                    if max_concentration_multi > 0:
+                        moe_metrics['max_expert_pct_multi'] = max_concentration_multi
+                    if 'knowledge_top_expert_pct' in util:
+                        moe_metrics['k_max'] = util['knowledge_top_expert_pct']
+                    if 'skill_top_expert_pct' in util:
+                        moe_metrics['s_max'] = util['skill_top_expert_pct']
+                    if max_ratio > 0:
+                        moe_metrics['max_exp_rel'] = max_ratio
+                    if k_ratio is not None:
+                        moe_metrics['k_rel'] = k_ratio
+                    if s_ratio is not None:
+                        moe_metrics['s_rel'] = s_ratio
                 
                 # Auxiliary loss metrics
                 if 'aux_losses' in moe_info:
@@ -294,6 +328,18 @@ def train_one_epoch(
                     moe_parts.append(f"entropy={moe_metrics['entropy']:.2f}")
                 if 'max_expert_pct' in moe_metrics:
                     moe_parts.append(f"max_exp={moe_metrics['max_expert_pct']:.1f}%")
+                if 'max_expert_pct_multi' in moe_metrics:
+                    moe_parts.append(f"max_exp_multi={moe_metrics['max_expert_pct_multi']:.1f}%")
+                if 'k_max' in moe_metrics:
+                    moe_parts.append(f"k_max={moe_metrics['k_max']:.1f}%")
+                if 's_max' in moe_metrics:
+                    moe_parts.append(f"s_max={moe_metrics['s_max']:.1f}%")
+                if 'max_exp_rel' in moe_metrics:
+                    moe_parts.append(f"max_rel={moe_metrics['max_exp_rel']:.2f}x")
+                if 'k_rel' in moe_metrics:
+                    moe_parts.append(f"k_rel={moe_metrics['k_rel']:.2f}x")
+                if 's_rel' in moe_metrics:
+                    moe_parts.append(f"s_rel={moe_metrics['s_rel']:.2f}x")
                 if 'aux_loss' in moe_metrics and moe_metrics['aux_loss'] > 0:
                     moe_parts.append(f"aux={moe_metrics['aux_loss']:.4f}")
                 # Detailed aux components if available
