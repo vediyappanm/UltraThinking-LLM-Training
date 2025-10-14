@@ -64,13 +64,18 @@ class NoisyTopKRouter(nn.Module):
         hidden_dim: int,
         num_experts: int,
         top_k: int = 2,
-        noise_std: float = 1.0
+        noise_std: float = 1.0,
+        warmup_steps: int = 100
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_experts = num_experts
         self.top_k = top_k
         self.noise_std = noise_std
+        self.warmup_steps = warmup_steps
+        
+        # Track forward passes for warmup
+        self.register_buffer('_forward_count', torch.tensor(0, dtype=torch.long))
         
         # Router network - use float32
         # Router gate with BALANCED initialization for immediate load balancing
@@ -78,17 +83,16 @@ class NoisyTopKRouter(nn.Module):
         
         # CRITICAL: Initialize router to start nearly uniform from step 0
         with torch.no_grad():
-            # Very small random weights - near zero input dependence initially
-            self.gate.weight.uniform_(-0.001, 0.001)
-            # Initialize bias to encourage uniform distribution
-            # All biases start equal -> uniform softmax from step 0
+            # ZERO weights initially - purely noise-driven routing at start
+            self.gate.weight.zero_()
+            # Zero bias - all experts equally likely before learning
             self.gate.bias.zero_()
         
         # Learnable noise parameters
         self.noise_linear = nn.Linear(hidden_dim, num_experts, dtype=torch.float32)
         # Initialize noise layer with small weights
         with torch.no_grad():
-            self.noise_linear.weight.uniform_(-0.001, 0.001)  # Very small for stability
+            self.noise_linear.weight.zero_()  # Start with pure random routing
         
     @torchdynamo_disable
     def forward(
@@ -104,21 +108,35 @@ class NoisyTopKRouter(nn.Module):
         hidden_states_flat = hidden_states.view(-1, hidden_dim)  # [B*S, H]
         original_dtype = hidden_states.dtype
 
-        # CRITICAL FIX: Force balanced routing with Gumbel-Softmax
+        # Increment forward counter
+        if training:
+            self._forward_count += 1
+        
+        # CRITICAL FIX: Force balanced routing with warmup period
         device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
         with torch.amp.autocast(device_type=device_type, enabled=False):
             hs_fp32 = hidden_states_flat.to(dtype=torch.float32)
+            
+            # Calculate warmup factor (1.0 at start, 0.0 after warmup)
+            warmup_factor = max(0.0, 1.0 - self._forward_count.item() / max(self.warmup_steps, 1))
 
-            # Router logits with VERY small initialization already applied
+            # Router logits with ZERO initialization
             raw_logits = self.gate(hs_fp32)  # [B*S, E]
             
-            # BALANCED ROUTING: Force exploration and prevent collapse
-            if training:
-                # Add strong Gumbel noise for exploration (especially important for small expert counts)
+            # WARMUP: Start with nearly uniform, gradually allow learning
+            if training and warmup_factor > 0:
+                # During warmup, force nearly uniform distribution
+                # Strong noise dominates, logits contribute minimally
                 gumbel_noise = -torch.log(-torch.log(torch.rand_like(raw_logits) + 1e-10) + 1e-10)
-                # Higher temperature for small expert counts to force diversity
-                temperature = max(1.0, 8.0 / self.num_experts)  # Adaptive temperature
-                logits = (raw_logits + gumbel_noise * 0.5) / temperature
+                # Very high temperature during warmup for uniform distribution
+                temperature = 10.0 * warmup_factor + 1.0 * (1 - warmup_factor)
+                logits = (raw_logits * (1 - warmup_factor) + gumbel_noise) / temperature
+            elif training:
+                # After warmup: normal Gumbel-Softmax with exploration
+                gumbel_noise = -torch.log(-torch.log(torch.rand_like(raw_logits) + 1e-10) + 1e-10)
+                # Adaptive temperature for small expert counts
+                temperature = max(1.0, 8.0 / self.num_experts)
+                logits = (raw_logits + gumbel_noise * 0.3) / temperature
             else:
                 logits = raw_logits
             
@@ -126,7 +144,6 @@ class NoisyTopKRouter(nn.Module):
             scores = F.softmax(logits, dim=-1)
             
             # ADAPTIVE: Minimum probability scales with expert count
-            # Smaller expert pools need higher minimums to prevent collapse
             # For 8 experts: min_prob = 0.05 (5%), for 64 experts: min_prob = 0.006 (0.6%)
             min_prob = max(0.001, 0.4 / self.num_experts)
             scores = scores * (1 - min_prob * self.num_experts) + min_prob
