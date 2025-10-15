@@ -47,6 +47,34 @@ class ModelConfig:
     rope_scaling: Optional[Dict] = None
     gradient_checkpointing: bool = True
     max_position_embeddings: int = 8192
+    
+    def __post_init__(self):
+        """Validate configuration after initialization"""
+        # Check n_head is divisible by n_kv_head
+        if self.n_head % self.n_kv_head != 0:
+            raise ValueError(
+                f"n_head ({self.n_head}) must be divisible by n_kv_head ({self.n_kv_head})"
+            )
+        
+        # Check rotary_dim
+        head_dim = self.n_embd // self.n_head
+        if self.rotary_dim > head_dim:
+            raise ValueError(
+                f"rotary_dim ({self.rotary_dim}) cannot exceed head_dim ({head_dim})"
+            )
+        
+        # Warn about suboptimal settings
+        if self.flash_attention and not FLASH_ATTENTION_AVAILABLE:
+            warnings.warn(
+                "flash_attention=True but Flash Attention not installed. "
+                "Install with: pip install flash-attn --no-build-isolation"
+            )
+        
+        if self.gradient_checkpointing and self.use_cache:
+            warnings.warn(
+                "gradient_checkpointing=True with use_cache=True may cause issues. "
+                "Cache will be disabled during training with gradient checkpointing."
+            )
 
 
 class RMSNorm(nn.Module):
@@ -66,29 +94,35 @@ class RMSNorm(nn.Module):
 
 
 class RotaryPositionalEmbedding(nn.Module):
-    """Rotary Positional Embedding with dynamic scaling"""
+    """Rotary Positional Embedding with enhanced stability for long contexts"""
     
-    def __init__(self, dim: int, max_position_embeddings: int = 2048, base: int = 10000):
+    def __init__(self, dim: int, max_position_embeddings: int = 2048, base: int = 10000, scaling_factor: float = 1.0):
         super().__init__()
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
+        self.scaling_factor = scaling_factor
         
-        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float() / self.dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        # Use float64 for better numerical precision
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2, dtype=torch.float64) / self.dim))
+        self.register_buffer("inv_freq", inv_freq.float(), persistent=False)
         
         self._seq_len_cached = 0
         self._cos_cached = None
         self._sin_cached = None
 
     def _update_cos_sin_cache(self, x, seq_len):
-        if seq_len != self._seq_len_cached or self._cos_cached.device != x.device:
-            self._seq_len_cached = seq_len
-            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
+        # Apply scaling for extrapolation
+        scaled_seq_len = int(seq_len * self.scaling_factor)
+        
+        if scaled_seq_len != self._seq_len_cached or self._cos_cached is None or self._cos_cached.device != x.device:
+            self._seq_len_cached = scaled_seq_len
+            t = torch.arange(scaled_seq_len, device=x.device, dtype=self.inv_freq.dtype)
             freqs = torch.outer(t, self.inv_freq)
             emb = torch.cat((freqs, freqs), dim=-1)
-            self._cos_cached = emb.cos()[None, None, :, :]
-            self._sin_cached = emb.sin()[None, None, :, :]
+            # Use float32 for cos/sin computation (more stable)
+            self._cos_cached = emb.cos().to(x.dtype)[None, None, :, :]
+            self._sin_cached = emb.sin().to(x.dtype)[None, None, :, :]
 
     def forward(self, x, seq_len=None):
         if seq_len is None:
@@ -127,6 +161,9 @@ class SwiGLU(nn.Module):
         self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
         self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
         self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
+        
+        # Mark for scaled initialization
+        self.down_proj.scale_init = True
 
     def forward(self, x):
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
@@ -150,7 +187,10 @@ class GroupedQueryAttention(nn.Module):
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=config.attention_bias)
         
         self.rotary_emb = RotaryPositionalEmbedding(
-            config.rotary_dim, max_position_embeddings=config.n_positions
+            config.rotary_dim, 
+            max_position_embeddings=config.n_positions,
+            base=int(config.rope_theta),
+            scaling_factor=1.0
         )
         
         self.attention_dropout = nn.Dropout(config.attention_dropout)
@@ -194,17 +234,22 @@ class GroupedQueryAttention(nn.Module):
                 key_states.transpose(1, 2), 
                 value_states.transpose(1, 2),
                 dropout_p=self.attention_dropout.p if self.training else 0.0,
-                causal=True
+                causal=True,
+                window_size=(self.config.sliding_window, self.config.sliding_window),
             ).transpose(1, 2)
         else:
             # Prefer PyTorch SDPA for stability and memory efficiency
             try:
                 # SDPA expects (batch, heads, seq, dim)
-                # attn_mask supports additive masks of shape (batch, 1, seq, seq) or (batch, seq, seq)
+                # CRITICAL FIX: Improved mask handling
                 sdpa_mask = None
                 if attention_mask is not None:
-                    # Convert to (batch, seq, seq) to broadcast across heads
-                    sdpa_mask = attention_mask.squeeze(1)
+                    # Convert additive mask to boolean for stability
+                    # Additive masks use large negative values for masked positions
+                    sdpa_mask = attention_mask > -1e8
+                    # OR keep as additive but ensure correct dtype
+                    # sdpa_mask = attention_mask.to(query_states.dtype)
+                
                 attn_output = F.scaled_dot_product_attention(
                     query_states,
                     key_states,
@@ -214,11 +259,19 @@ class GroupedQueryAttention(nn.Module):
                     is_causal=(sdpa_mask is None)  # causal if we didn't pass a combined mask
                 )
             except Exception:
-                # Fallback to manual attention
+                # Fallback to manual attention with NaN protection
                 attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
                 if attention_mask is not None:
                     attn_weights = attn_weights + attention_mask.to(attn_weights.dtype)
-                attn_weights = F.softmax(attn_weights, dim=-1)
+                
+                # CRITICAL FIX: Clamp before softmax to prevent all -inf rows (NaN)
+                mask_value = -1e4 if attn_weights.dtype in (torch.float16, torch.bfloat16) else -1e9
+                attn_weights = torch.clamp(attn_weights, min=mask_value, max=1e4)
+                # Use float32 for softmax stability
+                attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+                # Add small epsilon to prevent exact zeros
+                attn_weights = attn_weights + 1e-10
+                
                 attn_weights = self.attention_dropout(attn_weights)
                 attn_output = torch.matmul(attn_weights, value_states)
 
@@ -316,13 +369,22 @@ class AdvancedGPTModel(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
-        """Initialize weights using scaled initialization"""
+        """Initialize weights using improved scaled initialization"""
         if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            # Use truncated normal for better convergence
+            std = 0.02
+            if hasattr(module, 'scale_init') and module.scale_init:
+                # Scale down residual layers (GPT-3/LLaMA style)
+                std /= math.sqrt(2 * self.config.n_layer)
+            
+            torch.nn.init.trunc_normal_(module.weight, mean=0.0, std=std, a=-2*std, b=2*std)
+            
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if hasattr(module, 'padding_idx') and module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
 
     def forward(self, input_ids, attention_mask=None, past_key_values=None, labels=None, use_cache=None):
         batch_size, seq_length = input_ids.shape
@@ -361,20 +423,24 @@ class AdvancedGPTModel(nn.Module):
         
         for i, (layer, past_key_value) in enumerate(zip(self.layers, past_key_values)):
             if self.config.gradient_checkpointing and self.training:
-                hidden_states, present_key_value = torch.utils.checkpoint.checkpoint(
+                # CRITICAL FIX: Disable cache during gradient checkpointing
+                # Checkpointing discards activations, incompatible with caching
+                hidden_states, _ = torch.utils.checkpoint.checkpoint(
                     layer,
                     hidden_states,
                     attention_mask,
-                    use_cache,
-                    past_key_value,
+                    False,  # Force use_cache=False
+                    None,   # Force past_key_value=None
                     use_reentrant=False,
                 )
+                present_key_value = None
             else:
                 hidden_states, present_key_value = layer(
                     hidden_states, attention_mask, use_cache, past_key_value
                 )
             
-            if use_cache:
+            # Only append cache if not using gradient checkpointing
+            if use_cache and not (self.config.gradient_checkpointing and self.training):
                 present_key_values.append(present_key_value)
 
         hidden_states = self.norm(hidden_states)

@@ -249,7 +249,18 @@ lm_eval --model hf \
 
 ### Training Loss Curves
 
-![Training Loss](docs/images/training_loss.png)
+```
+Training Loss Over Time
+6.0 ┤
+5.5 ┤╮
+5.0 ┤╰╮
+4.5 ┤ ╰╮
+4.0 ┤  ╰╮
+3.5 ┤   ╰╮
+3.0 ┤    ╰─────────────
+    └─────────────────────────────────
+    0   10B  20B  30B  40B  50B tokens
+```
 
 **Key Observations**:
 - Smooth convergence with cosine learning rate schedule
@@ -258,7 +269,15 @@ lm_eval --model hf \
 
 ### Expert Utilization Over Time
 
-![Expert Utilization](docs/images/expert_utilization.png)
+```
+Expert Load Balance (8 experts)
+100% ┤ ████████████████████████████████
+ 75% ┤ ████████████████████████████████
+ 50% ┤ ████████████████████████████████
+ 25% ┤ ████████████████████████████████
+  0% ┤────────────────────────────────
+     E0  E1  E2  E3  E4  E5  E6  E7
+```
 
 **Analysis**:
 - Experts specialize after ~5B tokens

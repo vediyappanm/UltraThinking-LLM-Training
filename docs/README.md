@@ -8,9 +8,9 @@ Complete guides for training state-of-the-art language models.
 
 Start here if you're new to ULTRATHINK:
 
-1. **[Installation](../INSTALLATION_GUIDE.md)** - Set up your environment
-2. **[Getting Started](getting_started.md)** - Your first training run
-3. **[Training Small Models](training_small.md)** - Best practices for small datasets
+1. **[Training Quickstart](TRAINING_QUICKSTART.md)** - Get started in 5 minutes
+2. **[Training Small Models](training_small.md)** - Best practices for limited hardware
+3. **[Google Colab](colab.md)** - Train with free GPU in your browser
 
 ## Training Guides
 
@@ -20,26 +20,26 @@ Start here if you're new to ULTRATHINK:
 - **[Datasets](datasets.md)** - Using built-in, custom, and mixed datasets
 
 ### Advanced Training
+- **[Advanced Training Guide](ADVANCED_TRAINING_GUIDE.md)** - MoE, DRE, Constitutional AI
 - **[DeepSpeed](training_deepspeed.md)** - ZeRO optimization for memory efficiency
-- **[Distributed Training](accelerate.md)** - Multi-GPU with Accelerate/DDP
-- **[Advanced Features](training_full.md)** - 4D parallelism, RLHF, MoE
+- **[Distributed Training](training_distributed.md)** - Multi-GPU setup
 
 ## Reference
 
-- **[Model Card](../MODEL_CARD.md)** - Architecture specifications and limitations
+- **[Model Card](MODEL_CARD.md)** - Architecture specifications and limitations
 - **[Benchmarks](BENCHMARKS.md)** - Performance metrics and results
 - **[Framework Comparison](COMPARISON.md)** - vs GPT-NeoX, Megatron-LM, Axolotl
 - **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues and solutions
-- **[Testing Guide](../TESTING_GUIDE.md)** - Running and writing tests
-- **[Development](development.md)** - Code structure and contributing
-- **[Evaluation](evaluation.md)** - Benchmarking your models
+- **[Project Structure](PROJECT_STRUCTURE.md)** - Understanding the codebase
+- **[Architecture Overview](ARCHITECTURE_OVERVIEW.md)** - Visual system diagrams
 - **[FAQ](faq.md)** - Common questions and solutions
 
 ## Planning & Community
 
 - **[Roadmap](ROADMAP.md)** - Future plans and features
-- **[Marketing Guide](MARKETING_GUIDE.md)** - Promotion strategy
-- **[Quick Start Promotion](QUICK_START_PROMOTION.md)** - 7-day launch plan
+- **[Contributing](CONTRIBUTING.md)** - Contribution guidelines
+- **[Code of Conduct](CODE_OF_CONDUCT.md)** - Community standards
+- **[Changelog](CHANGELOG.md)** - Version history
 
 ## Monitoring & Tools
 
