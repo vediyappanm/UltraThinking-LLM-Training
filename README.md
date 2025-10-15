@@ -31,7 +31,7 @@
     <img src="https://img.shields.io/badge/PyTorch-2.0+-EE4C2C?logo=pytorch&logoColor=white" alt="PyTorch"/>
   </a>
   <a href="https://huggingface.co/">
-    <img src="https://img.shields.io/badge/🤗-Hugging%20Face-yellow" alt="Hugging Face"/>
+    <img src="https://huggingface.co/Vedisasi/UltraThinking-LLM-Training" alt="Hugging Face"/>
   </a>
   <a href="https://www.docker.com/">
     <img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" alt="Docker"/>
@@ -102,7 +102,7 @@ python train_ultrathink.py \
 ```bash
 # Clone repository
 git clone https://github.com/vediyappanm/UltraThinking-LLM-Training.git
-cd UltraThinking-LLM-Training/deep
+cd UltraThinking-LLM-Training
 
 # Install dependencies
 pip install -r requirements.txt
@@ -162,7 +162,7 @@ python tests/smoke_test.py
 
 ### 🚀 Getting Started
 - **[Training Quickstart](docs/TRAINING_QUICKSTART.md)** - Get started in 5 minutes
-- **[Advanced Training Guide](ADVANCED_TRAINING_GUIDE.md)** - Deep dive into all features
+- **[Advanced Training Guide](docs/ADVANCED_TRAINING_GUIDE.md)** - Deep dive into all features
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
 - **[Google Colab](docs/colab.md)** - Train in the cloud for free
 
@@ -172,7 +172,7 @@ python tests/smoke_test.py
 - **[Model Card](docs/MODEL_CARD.md)** - Model specifications
 
 ### 🏗️ Architecture & Development
-- **[Architecture Overview](ARCHITECTURE_OVERVIEW.md)** - Visual system diagrams
+- **[Architecture Overview](docs/ARCHITECTURE_OVERVIEW.md)** - Visual system diagrams
 - **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Understanding the codebase
 - **[Roadmap](docs/ROADMAP.md)** - Future plans and features
 
@@ -182,16 +182,16 @@ python tests/smoke_test.py
 - [Dataset Configuration](docs/datasets.md) - Using custom datasets
 
 ### 🤝 Community
-- **[Contributing](CONTRIBUTING.md)** - Contribution guidelines
-- **[Code of Conduct](CODE_OF_CONDUCT.md)** - Community standards
-- **[Changelog](CHANGELOG.md)** - Version history
+- **[Contributing](docs/CONTRIBUTING.md)** - Contribution guidelines
+- **[Code of Conduct](docs/CODE_OF_CONDUCT.md)** - Community standards
+- **[Changelog](docs/CHANGELOG.md)** - Version history
 
 **[📖 Full Documentation Index](docs/README.md)**
 
 ## 📁 Project Structure
 
 ```
-deep/
+UltraThinking-LLM-Training/
 ├── train_ultrathink.py        # Main training script
 ├── train_advanced.py          # YAML config-based training
 ├── app_gradio.py              # Web UI for inference
@@ -208,7 +208,7 @@ deep/
 └── docs/                     # Documentation and guides
 ```
 
-See **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** for detailed explanations.
+See **[PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md)** for detailed explanations.
 
 ## 🔥 Training Examples
 
@@ -275,8 +275,8 @@ docker run --gpus all \
 ## 🤝 Contributing
 
 We welcome contributions! Please see:
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Guidelines and setup
-- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** - Community standards
+- **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Guidelines and setup
+- **[Code of Conduct](docs/CODE_OF_CONDUCT.md)** - Community standards
 - **[Roadmap](docs/ROADMAP.md)** - See what we're building next
 
 ### 🌟 Star History
@@ -294,7 +294,7 @@ If you find ULTRATHINK useful, please consider giving us a star! ⭐
 | Medium | 760M | 24 | 1536 | 4096 | 24GB |
 | Large | 1.3B | 32 | 2048 | 8192 | 40GB |
 
-See **[MODEL_CARD.md](MODEL_CARD.md)** for complete specifications.
+See **[MODEL_CARD.md](docs/MODEL_CARD.md)** for complete specifications.
 
 ## 📄 License
 
