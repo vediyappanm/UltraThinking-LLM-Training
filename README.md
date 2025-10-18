@@ -173,6 +173,7 @@ python tests/smoke_test.py
 
 ### 🏗️ Architecture & Development
 - **[Architecture Overview](docs/ARCHITECTURE_OVERVIEW.md)** - Visual system diagrams
+- **[ULTRATHINK Training Pipeline (Interactive HTML)](ultrathink_doc%20(1).html)** - Full end-to-end training workflow diagram
 - **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Understanding the codebase
 - **[Roadmap](docs/ROADMAP.md)** - Future plans and features
 

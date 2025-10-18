@@ -1,0 +1,10 @@
+Please open the file ultrathink_doc (1).html and replace EVERYTHING from line 1119 (the <svg> tag) through line 1333 (the </svg> tag) with the complete content from training_diagram.svg file.
+
+This will create a clean, modern training-only pipeline diagram that shows:
+- Phase 1: Initialization (5 components)
+- Phase 2: Training Loop (detailed flow with side architecture details)  
+- Phase 3: Monitoring & Checkpointing (4 components)
+- Phase 4: 4D Parallelism (4 strategies)
+- Phase 5: Completion
+
+The diagram is already complete in training_diagram.svg and just needs to be inserted into the HTML.
