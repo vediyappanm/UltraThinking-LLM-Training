@@ -1,6 +1,15 @@
 # ULTRATHINK
 
 <p align="center">
+  <a href="https://ultrathinking-llm-training.netlify.app/" target="_blank">
+    <strong>📖 Read the Complete ULTRATHINK Book (Interactive)</strong>
+  </a>
+  <br/>
+  <em>Full project documentation, diagrams, and guides</em>
+  <br/><br/>
+</p>
+
+<p align="center">
   <img src="docs/images/pp.jpg" alt="ULTRATHINK Logo" width="250" />
 </p>
 
@@ -17,6 +26,9 @@
   </a>
   <a href="https://www.python.org/downloads/">
     <img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python 3.9+"/>
+  </a>
+  <a href="https://ultrathinking-llm-training.netlify.app/">
+    <img src="https://img.shields.io/badge/Book-Read%20Online-00C7B7?logo=readthedocs&logoColor=white" alt="Read the Book"/>
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/>
@@ -47,6 +59,7 @@
 <p align="center">
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-key-features">Features</a> •
+  <a href="https://ultrathinking-llm-training.netlify.app/">Book</a> •
   <a href="#-documentation">Documentation</a> •
   <a href="docs/BENCHMARKS.md">Benchmarks</a> •
   <a href="docs/COMPARISON.md">Comparisons</a> •
@@ -173,7 +186,6 @@ python tests/smoke_test.py
 
 ### 🏗️ Architecture & Development
 - **[Architecture Overview](docs/ARCHITECTURE_OVERVIEW.md)** - Visual system diagrams
-- **[ULTRATHINK Training Pipeline (Interactive HTML)](ultrathink_doc%20(1).html)** - Full end-to-end training workflow diagram
 - **[Project Structure](docs/PROJECT_STRUCTURE.md)** - Understanding the codebase
 - **[Roadmap](docs/ROADMAP.md)** - Future plans and features
 
