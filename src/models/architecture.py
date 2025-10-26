@@ -21,7 +21,7 @@ except ImportError:
 
 @dataclass
 class ModelConfig:
-    """Advanced model configuration for Claude Opus 4 scale models"""
+    """Advanced model configuration for scale models"""
     vocab_size: int = 100352
     n_positions: int = 8192
     n_embd: int = 4096

@@ -207,10 +207,27 @@ class TextDataset(Dataset):
         for p in paths:
             if self.config.file_type == "json":
                 with open(p, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        item = json.loads(line)
-                        if self.config.text_column in item:
-                            data.append({self.config.text_column: item[self.config.text_column]})
+                    content = f.read().strip()
+                    # Try to parse as JSON array first
+                    try:
+                        json_data = json.loads(content)
+                        if isinstance(json_data, list):
+                            # Standard JSON array format
+                            for item in json_data:
+                                if isinstance(item, dict) and self.config.text_column in item:
+                                    data.append({self.config.text_column: item[self.config.text_column]})
+                        elif isinstance(json_data, dict) and self.config.text_column in json_data:
+                            # Single JSON object
+                            data.append({self.config.text_column: json_data[self.config.text_column]})
+                    except json.JSONDecodeError:
+                        # Fall back to JSONL format (one JSON object per line)
+                        f.seek(0)
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                item = json.loads(line)
+                                if self.config.text_column in item:
+                                    data.append({self.config.text_column: item[self.config.text_column]})
             elif self.config.file_type == "txt":
                 with open(p, 'r', encoding='utf-8') as f:
                     text = f.read()
