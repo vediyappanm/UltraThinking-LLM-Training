@@ -1,0 +1,72 @@
+# LoRA/QLoRA Training Configuration
+# Paper: https://arxiv.org/abs/2106.09685
+
+model:
+  name: "meta-llama/Llama-2-7b-hf"  # Base model
+  load_in_8bit: false  # Use 8-bit base model
+  load_in_4bit: false  # Use 4-bit base model (QLoRA)
+  
+lora:
+  # LoRA parameters
+  r: 16  # Rank (typical: 8-64, higher = more capacity)
+  lora_alpha: 32  # Scaling factor (typically 2*r)
+  lora_dropout: 0.1  # Dropout probability
+  bias: "none"  # Bias training: none, all, lora_only
+  
+  # Target modules (which layers to adapt)
+  target_modules:
+    - "q_proj"  # Query projection
+    - "k_proj"  # Key projection
+    - "v_proj"  # Value projection
+    - "o_proj"  # Output projection
+    # Add more for higher capacity:
+    # - "gate_proj"
+    # - "up_proj"
+    # - "down_proj"
+  
+qlora:
+  # QLoRA-specific (4-bit training)
+  use_qlora: false  # Enable 4-bit quantization
+  bnb_4bit_compute_dtype: "bfloat16"  # Compute dtype
+  bnb_4bit_quant_type: "nf4"  # Quantization type: nf4 or fp4
+  bnb_4bit_use_double_quant: true  # Double quantization (better)
+  
+dataset:
+  name: "timdettmers/openassistant-guanaco"  # Fine-tuning dataset
+  max_length: 512
+  
+training:
+  learning_rate: 2.0e-4  # Higher than full fine-tuning
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  num_epochs: 3
+  max_grad_norm: 1.0
+  warmup_steps: 100
+  
+  # Logging
+  logging_steps: 10
+  eval_steps: 100
+  save_steps: 500
+  
+  # Output
+  output_dir: "./output/lora"
+  save_total_limit: 3
+  merge_weights: true  # Merge LoRA weights after training
+
+# Hardware
+device: "cuda"
+gradient_checkpointing: true  # Save memory
+mixed_precision: true
+
+# Expected results:
+# Standard LoRA:
+# - Trainable params: ~0.5% of total
+# - Memory: 60% reduction
+# - Speed: 2-3x faster
+# - Quality: 95-98% of full fine-tuning
+#
+# QLoRA (use_qlora: true):
+# - Trainable params: ~0.5% of total  
+# - Memory: 75-80% reduction
+# - Can train 7B on 24GB GPU!
+# - Quality: 93-96% of full fine-tuning

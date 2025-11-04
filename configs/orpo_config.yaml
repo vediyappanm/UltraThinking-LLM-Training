@@ -1,0 +1,43 @@
+# ORPO (Odds Ratio Preference Optimization) Training Configuration
+# Paper: https://arxiv.org/abs/2403.07691
+# Key advantage: No reference model needed!
+
+model:
+  name: "gpt2"  # Base model name or path
+  # No reference model needed for ORPO!
+  
+orpo:
+  alpha: 1.0  # Weight for SFT loss (typical: 0.5-2.0)
+  beta: 0.1  # Weight for OR loss (typical: 0.1-0.5)
+  
+dataset:
+  name: "Anthropic/hh-rlhf"  # Preference dataset
+  split: "train"
+  max_length: 512
+  
+training:
+  learning_rate: 8.0e-6  # Slightly higher than DPO
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  num_epochs: 3
+  max_grad_norm: 1.0
+  warmup_steps: 100
+  
+  # Logging
+  logging_steps: 10
+  eval_steps: 100
+  save_steps: 500
+  
+  # Output
+  output_dir: "./output/orpo"
+  save_total_limit: 3
+
+# Hardware
+device: "cuda"
+mixed_precision: true
+
+# Advantages over DPO:
+# - 50% less memory (no reference model!)
+# - Single-stage training (combines SFT + alignment)
+# - More sample-efficient
+# - Simpler implementation

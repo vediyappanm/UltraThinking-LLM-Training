@@ -32,6 +32,12 @@ class ModelConfig:
     intermediate_size: int = 14336
     activation: str = "swiglu"
     norm_type: str = "rmsnorm"
+    # Modular architecture options
+    attention_type: str = "flash_v3"  # flash_v3 | sliding_window | standard | paged
+    ffn_type: str = "swiglu"  # swiglu | geglu | relu | moe_swiglu (reserved)
+    normalization: Optional[str] = None  # overrides norm_type if set
+    position_encoding: str = "rope"  # rope | alibi | learned
+    moe_routing: str = "top_k"  # top_k | expert_choice | soft
     norm_eps: float = 1e-6
     dropout: float = 0.0
     attention_dropout: float = 0.0
@@ -75,6 +81,12 @@ class ModelConfig:
                 "gradient_checkpointing=True with use_cache=True may cause issues. "
                 "Cache will be disabled during training with gradient checkpointing."
             )
+        # Normalize alias fields
+        if self.normalization is not None:
+            self.norm_type = self.normalization
+        if self.ffn_type and self.activation != self.ffn_type:
+            # Keep activation consistent with ffn_type for MLP selection
+            self.activation = self.ffn_type
 
 
 class RMSNorm(nn.Module):
@@ -228,7 +240,7 @@ class GroupedQueryAttention(nn.Module):
         value_states = self._repeat_kv(value_states, self.num_kv_groups)
 
         # Flash Attention if available
-        if FLASH_ATTENTION_AVAILABLE and self.config.flash_attention:
+        if FLASH_ATTENTION_AVAILABLE and self.config.flash_attention and self.config.attention_type in ("flash_v3", "sliding_window"):
             attn_output = flash_attn_func(
                 query_states.transpose(1, 2),
                 key_states.transpose(1, 2), 
@@ -237,6 +249,9 @@ class GroupedQueryAttention(nn.Module):
                 causal=True,
                 window_size=(self.config.sliding_window, self.config.sliding_window),
             ).transpose(1, 2)
+        elif self.config.attention_type == "paged":
+            # Paged attention requires specialized kernels (e.g., vLLM). Provide a clear stub.
+            raise NotImplementedError("Paged attention not implemented in core model. Use vLLM for paged KV cache.")
         else:
             # Prefer PyTorch SDPA for stability and memory efficiency
             try:
@@ -249,6 +264,18 @@ class GroupedQueryAttention(nn.Module):
                     sdpa_mask = attention_mask > -1e8
                     # OR keep as additive but ensure correct dtype
                     # sdpa_mask = attention_mask.to(query_states.dtype)
+                # Apply sliding window locality for non-Flash path if configured
+                if self.config.sliding_window is not None and self.config.attention_type in ("sliding_window", "standard", "flash_v3"):
+                    k_len = key_states.size(2)
+                    i = torch.arange(q_len, device=hidden_states.device)
+                    j = torch.arange(k_len, device=hidden_states.device)
+                    dist = i[:, None] - j[None, :]
+                    local = (dist >= 0)
+                    w = int(self.config.sliding_window)
+                    if w > 0:
+                        local = local & (dist < w)
+                    local = local[None, None, :, :]  # [1,1,q,k]
+                    sdpa_mask = local if sdpa_mask is None else (sdpa_mask & local)
                 
                 attn_output = F.scaled_dot_product_attention(
                     query_states,

@@ -75,3 +75,40 @@ uvicorn>=0.23.0
 gradio>=3.45.0
 streamlit>=1.27.0
 huggingface-hub>=0.15.0
+
+# ============= UltraThinking v2.0 Dependencies =============
+
+# Parameter-Efficient Fine-Tuning (LoRA, QLoRA, DoRA)
+peft>=0.7.0
+bitsandbytes>=0.41.0  # For 4-bit/8-bit quantization
+
+# Quantization & Optimization
+auto-gptq>=0.5.0  # GPTQ quantization
+autoawq>=0.1.6  # AWQ quantization
+
+# Evaluation & Benchmarking
+lm-eval>=0.4.0  # Language model evaluation harness
+
+# Advanced Training (DPO, ORPO, etc.)
+trl>=0.7.4  # Transformer Reinforcement Learning (includes DPO)
+
+# Flash Attention (optional, for speed)
+# flash-attn>=2.3.0  # Uncomment if CUDA available
+
+# Distributed Training
+deepspeed>=0.12.0  # Advanced distributed training
+
+# Cloud SDKs (optional)
+boto3>=1.28.0
+google-cloud-storage>=2.13.0
+azure-storage-blob>=12.19.0
+
+# Security & Compliance (optional)
+cryptography>=41.0.0
+opacus>=1.4.0
+
+# AutoML / NAS
+optuna>=3.4.0
+
+# ONNX export (optional)
+onnx>=1.14.0

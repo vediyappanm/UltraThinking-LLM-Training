@@ -1,0 +1,38 @@
+# DPO (Direct Preference Optimization) Training Configuration
+# Paper: https://arxiv.org/abs/2305.18290
+
+model:
+  name: "gpt2"  # Base model name or path
+  reference_model: "gpt2"  # Reference model (usually same as base)
+  
+dpo:
+  beta: 0.1  # KL penalty coefficient (typical: 0.1-0.5)
+  label_smoothing: 0.0  # Label smoothing (0.0-0.1)
+  loss_type: "sigmoid"  # Loss type: sigmoid, hinge, ipo
+  reference_free: false  # Use reference-free variant
+  
+dataset:
+  name: "Anthropic/hh-rlhf"  # Preference dataset
+  split: "train"
+  max_length: 512  # Maximum sequence length
+  
+training:
+  learning_rate: 5.0e-7  # Lower than SFT (typical: 1e-7 to 1e-6)
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  num_epochs: 3
+  max_grad_norm: 1.0  # Gradient clipping
+  warmup_steps: 100
+  
+  # Logging
+  logging_steps: 10
+  eval_steps: 100
+  save_steps: 500
+  
+  # Output
+  output_dir: "./output/dpo"
+  save_total_limit: 3
+
+# Hardware
+device: "cuda"  # cuda or cpu
+mixed_precision: true  # Use automatic mixed precision

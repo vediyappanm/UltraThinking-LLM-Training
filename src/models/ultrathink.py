@@ -19,6 +19,8 @@ from .dynamic_reasoning import DynamicReasoningEngine, ReasoningPath, Complexity
 from .constitutional_ai import ConstitutionalReasoningCore, HarmCategory
 from .moe_advanced import MoELayer, ExpertConfig, HierarchicalMoE
 from .multimodal import UnifiedMultiModalModel, MultiModalConfig, Modality
+from .mamba import MambaModel
+from .hybrid import HybridModel
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,10 @@ class UltraThinkConfig:
     
     # Base model config
     model_config: ModelConfig = field(default_factory=ModelConfig)
+    # Architecture choice: 'transformer' | 'mamba' | 'hybrid'
+    architecture: str = "transformer"
+    # For hybrid: pattern of layers, e.g. ["mamba","attn",...]
+    hybrid_pattern: List[str] = field(default_factory=list)
     
     # Dynamic reasoning
     enable_dre: bool = True
@@ -88,8 +94,26 @@ class UltraThinkCore(nn.Module):
         
         self.config = config
         
-        # Base transformer model
-        self.base_model = AdvancedGPTModel(config.model_config)
+        # Base model (select architecture)
+        arch = getattr(config, 'architecture', 'transformer')
+        if arch == 'mamba':
+            self.base_model = MambaModel(
+                d_model=config.model_config.n_embd,
+                n_layers=config.model_config.n_layer,
+                vocab_size=config.model_config.vocab_size,
+                dropout=config.model_config.residual_dropout,
+            )
+        elif arch == 'hybrid':
+            pattern = config.hybrid_pattern if getattr(config, 'hybrid_pattern', None) else None
+            self.base_model = HybridModel(
+                model_cfg=config.model_config,
+                n_layers=config.model_config.n_layer,
+                vocab_size=config.model_config.vocab_size,
+                pattern=pattern,
+                dropout=config.model_config.residual_dropout,
+            )
+        else:
+            self.base_model = AdvancedGPTModel(config.model_config)
         
         # Dynamic Reasoning Engine
         if config.enable_dre:

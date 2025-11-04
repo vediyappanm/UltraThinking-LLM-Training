@@ -1,0 +1,66 @@
+seed: 42
+
+model_config_dict:
+  vocab_size: 50257
+  n_positions: 1024
+  n_embd: 512
+  n_layer: 8
+  n_head: 8
+  n_kv_head: 4
+  rotary_dim: 32
+  attention_type: sliding_window
+  sliding_window: 512
+
+training:
+  batch_size: 32
+  micro_batch_size: 2
+  gradient_accumulation_steps: 16
+  epochs: 1
+  max_steps: 400
+  learning_rate: 3.0e-4
+  warmup_steps: 20
+  mixed_precision: bf16     # set to fp16 if bf16 unsupported
+  max_grad_norm: 1.0
+  curriculum:
+    start_seq: 256
+    end_seq: 1024
+    ramp_steps: 400
+
+data:
+  tokenizer: gpt2
+  dataset: wikitext
+  subset: wikitext-2-raw-v1
+  eval_dataset: wikitext
+  eval_subset: wikitext-2-raw-v1
+  text_column: text
+  streaming: false
+
+ultrathink:
+  enable_moe: true
+  enable_dre: true
+  moe_layers: [1,3,5,7]          # apply MoE sparsely
+  moe_config:
+    num_knowledge_experts: 8
+    num_skill_experts: 8
+    num_meta_experts: 4
+    num_safety_experts: 2
+    top_k: 2
+    expert_dropout: 0.1
+    expert_capacity: 1.25
+    load_balance_weight: 0.01
+    entropy_reg_weight: 0.5
+
+logging:
+  log_interval: 10
+  eval_interval: 100
+  early_stop_patience: 0
+  tensorboard: true
+  mlflow:
+    enable: false
+  sample_prompts:
+    - "Explain mixture-of-experts."
+    - "How does dynamic reasoning routing help?"
+
+checkpointing:
+  output_dir: ./checkpoints_moe_dre
+  save_interval: 500
