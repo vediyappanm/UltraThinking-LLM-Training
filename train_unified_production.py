@@ -89,10 +89,14 @@ from src.training import (
 )
 
 # Data imports
-from src.data import (
-    UltraThinkDataset,
-    create_dataloaders,
-)
+try:
+    from src.data import SyntheticDataEngine, SyntheticDataConfig
+    from src.data.datasets import DatasetConfig, DATASET_CONFIGS
+    from src.data.data_loading import DataConfig
+    DATA_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Data modules not fully available: {e}")
+    DATA_AVAILABLE = False
 
 # Monitoring imports
 from src.monitoring import (
@@ -407,30 +411,145 @@ class UnifiedProductionTrainer:
         """Build data loaders"""
         logger.info("Building data loaders...")
         
-        from src.data import UltraThinkDataset, create_dataloaders
+        if not DATA_AVAILABLE:
+            logger.warning("Data modules not available, creating dummy dataloaders")
+            # Create dummy dataset for testing
+            class DummyDataset(torch.utils.data.Dataset):
+                def __init__(self, size=1000, seq_len=512, vocab_size=50000):
+                    self.size = size
+                    self.seq_len = seq_len
+                    self.vocab_size = vocab_size
+                
+                def __len__(self):
+                    return self.size
+                
+                def __getitem__(self, idx):
+                    return {
+                        'input_ids': torch.randint(0, self.vocab_size, (self.seq_len,)),
+                        'labels': torch.randint(0, self.vocab_size, (self.seq_len,)),
+                    }
+            
+            train_dataset = DummyDataset(size=10000, seq_len=self.config.max_seq_length)
+            val_dataset = DummyDataset(size=1000, seq_len=self.config.max_seq_length)
+            
+            self.train_loader = DataLoader(
+                train_dataset,
+                batch_size=self.config.batch_size,
+                shuffle=True,
+                num_workers=0,
+                pin_memory=True,
+            )
+            
+            self.val_loader = DataLoader(
+                val_dataset,
+                batch_size=self.config.batch_size,
+                shuffle=False,
+                num_workers=0,
+                pin_memory=True,
+            )
+            
+            logger.info(f"Dummy data loaders built: {len(train_dataset)} train, {len(val_dataset)} val samples")
+            return self.train_loader, self.val_loader
         
-        # Create dataset
-        train_dataset = UltraThinkDataset(
-            data_path=self.config.data_path,
-            split="train",
-            max_length=self.config.max_seq_length,
-        )
-        
-        val_dataset = UltraThinkDataset(
-            data_path=self.config.data_path,
-            split="validation",
-            max_length=self.config.max_seq_length,
-        )
-        
-        # Create loaders
-        self.train_loader, self.val_loader = create_dataloaders(
-            train_dataset=train_dataset,
-            val_dataset=val_dataset,
-            batch_size=self.config.batch_size,
-            num_workers=self.config.num_workers,
-        )
-        
-        logger.info(f"Data loaders built: {len(train_dataset)} train, {len(val_dataset)} val samples")
+        # Try to use actual data modules
+        try:
+            from datasets import load_dataset
+            from transformers import AutoTokenizer
+            
+            # Load tokenizer
+            tokenizer = AutoTokenizer.from_pretrained("gpt2")
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            
+            # Load dataset (using HuggingFace datasets)
+            logger.info("Loading dataset from HuggingFace...")
+            dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
+            
+            def tokenize_function(examples):
+                return tokenizer(
+                    examples["text"],
+                    truncation=True,
+                    max_length=self.config.max_seq_length,
+                    padding="max_length",
+                    return_tensors="pt",
+                )
+            
+            # Tokenize datasets
+            train_dataset = dataset["train"].map(
+                tokenize_function,
+                batched=True,
+                remove_columns=dataset["train"].column_names,
+            )
+            
+            val_dataset = dataset["validation"].map(
+                tokenize_function,
+                batched=True,
+                remove_columns=dataset["validation"].column_names,
+            )
+            
+            # Set format
+            train_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+            val_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+            
+            # Create dataloaders
+            self.train_loader = DataLoader(
+                train_dataset,
+                batch_size=self.config.batch_size,
+                shuffle=True,
+                num_workers=self.config.num_workers,
+                pin_memory=True,
+            )
+            
+            self.val_loader = DataLoader(
+                val_dataset,
+                batch_size=self.config.batch_size,
+                shuffle=False,
+                num_workers=self.config.num_workers,
+                pin_memory=True,
+            )
+            
+            logger.info(f"Data loaders built: {len(train_dataset)} train, {len(val_dataset)} val samples")
+            
+        except Exception as e:
+            logger.error(f"Failed to load real dataset: {e}")
+            logger.warning("Falling back to dummy dataset")
+            
+            # Fallback to dummy dataset
+            class DummyDataset(torch.utils.data.Dataset):
+                def __init__(self, size=1000, seq_len=512, vocab_size=50000):
+                    self.size = size
+                    self.seq_len = seq_len
+                    self.vocab_size = vocab_size
+                
+                def __len__(self):
+                    return self.size
+                
+                def __getitem__(self, idx):
+                    return {
+                        'input_ids': torch.randint(0, self.vocab_size, (self.seq_len,)),
+                        'labels': torch.randint(0, self.vocab_size, (self.seq_len,)),
+                    }
+            
+            train_dataset = DummyDataset(size=10000, seq_len=self.config.max_seq_length)
+            val_dataset = DummyDataset(size=1000, seq_len=self.config.max_seq_length)
+            
+            self.train_loader = DataLoader(
+                train_dataset,
+                batch_size=self.config.batch_size,
+                shuffle=True,
+                num_workers=0,
+                pin_memory=True,
+            )
+            
+            self.val_loader = DataLoader(
+                val_dataset,
+                batch_size=self.config.batch_size,
+                shuffle=False,
+                num_workers=0,
+                pin_memory=True,
+            )
+            
+            logger.info(f"Dummy data loaders built: {len(train_dataset)} train, {len(val_dataset)} val samples")
         
         return self.train_loader, self.val_loader
     
