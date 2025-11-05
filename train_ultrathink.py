@@ -57,6 +57,13 @@ try:
     from src.training.rlhf_advanced import RLHF2System, RLHFConfig
     from src.data.synthetic_generation import SyntheticDataEngine, SyntheticDataConfig
     from src.evaluation.benchmarks import ComprehensiveBenchmarkSuite, BenchmarkConfig
+    # Megatron compatibility
+    from src.ultrathink_compat import (
+        PipelineEngine, PipelineConfig,
+        ExpertParallelMoELayer, compute_moe_aux_loss,
+        get_fused_layer_norm, get_fused_rms_norm, FusedAdamW,
+        save_distributed_checkpoint, load_distributed_checkpoint, get_parallel_state,
+    )
 except ImportError as e:
     logger.error(f"Import error: {e}")
     logger.info("Make sure all dependencies are installed: pip install -r requirements.txt")
@@ -183,6 +190,24 @@ class UltraThinkTrainer:
         if self.args.num_heads % num_kv_heads != 0:
             num_kv_heads = self.args.num_heads  # Fall back to MHA if not divisible
         
+        if isinstance(self.args.model_config, dict):
+            self.args.vocab_size = int(self.args.model_config.get('vocab_size', self.args.vocab_size))
+            self.args.max_seq_length = int(self.args.model_config.get('n_positions', self.args.max_seq_length))
+            self.args.hidden_size = int(self.args.model_config.get('n_embd', self.args.hidden_size))
+            self.args.num_layers = int(self.args.model_config.get('n_layer', self.args.num_layers))
+            self.args.num_heads = int(self.args.model_config.get('n_head', self.args.num_heads))
+            self.args.num_kv_heads = int(self.args.model_config.get('n_kv_head', self.args.num_kv_heads))
+            if 'tensor_parallel_size' in self.args.model_config:
+                try:
+                    self.args.tensor_parallel_size = int(self.args.model_config['tensor_parallel_size'])
+                except Exception:
+                    pass
+            if 'use_megatron_tp' in self.args.model_config:
+                try:
+                    self.args.use_megatron_tp = bool(self.args.model_config['use_megatron_tp'])
+                except Exception:
+                    pass
+        
         model_config = ModelConfig(
             vocab_size=self.args.vocab_size,
             n_positions=self.args.max_seq_length,
@@ -196,7 +221,9 @@ class UltraThinkTrainer:
             dropout=self.args.dropout,
             attention_dropout=self.args.attention_dropout,
             flash_attention=self.args.use_flash_attention,
-            gradient_checkpointing=self.args.gradient_checkpointing
+            gradient_checkpointing=self.args.gradient_checkpointing,
+            tensor_parallel_size=self.args.tensor_parallel_size,
+            use_megatron_tp=self.args.use_megatron_tp,
         )
         
         # MoE config
@@ -871,6 +898,16 @@ def parse_args():
     parser.add_argument('--pipeline_parallel_size', type=int, default=1)
     parser.add_argument('--expert_parallel_size', type=int, default=1)
     parser.add_argument('--zero_stage', type=int, default=0)
+    parser.add_argument('--use_megatron_tp', action='store_true', help='Enable Megatron-style tensor parallel linears (requires multi-process)')
+    parser.add_argument('--use_pipeline_parallel', action='store_true', help='Enable pipeline parallelism')
+    parser.add_argument('--pipeline_schedule', type=str, default='1f1b', choices=['1f1b', 'gpipe'], help='Pipeline schedule')
+    parser.add_argument('--num_pipeline_microbatches', type=int, default=4, help='Number of pipeline microbatches')
+    parser.add_argument('--use_sequence_parallel', action='store_true', help='Enable sequence parallelism')
+    parser.add_argument('--use_expert_parallel', action='store_true', help='Enable expert parallelism for MoE')
+    parser.add_argument('--use_fused_ops', action='store_true', help='Enable fused operations (Apex/TE)')
+    parser.add_argument('--use_fp8', action='store_true', help='Enable FP8 training (Transformer Engine)')
+    parser.add_argument('--use_fused_optimizer', action='store_true', help='Use fused AdamW optimizer')
+    parser.add_argument('--use_distributed_checkpoint', action='store_true', help='Use distributed/sharded checkpointing')
     # DeepSpeed / Launchers
     parser.add_argument('--deepspeed', type=str, default=None, help='Path to DeepSpeed JSON config to enable DeepSpeed engine')
     parser.add_argument('--launcher', type=str, default='none', choices=['none','deepspeed','accelerate','torchrun'], help='Launcher used to start distributed run')
