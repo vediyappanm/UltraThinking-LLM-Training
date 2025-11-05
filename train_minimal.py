@@ -14,6 +14,7 @@ os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 import argparse
 import logging
 import yaml
+import time
 from pathlib import Path
 import torch
 import torch.nn as nn
@@ -24,8 +25,16 @@ import torch.distributed as dist
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
+
+# Force flush for immediate output
+import functools
+original_info = logger.info
+logger.info = functools.partial(original_info, extra={'flush': True})
 
 # ============================================================================
 # SIMPLE DUMMY DATASET (Always works)
@@ -252,22 +261,60 @@ class MinimalTrainer:
         logger.info("=" * 60)
         
         # Build components
+        logger.info("[1/3] Building model...")
         self.build_model()
+        logger.info("[2/3] Building optimizer...")
         self.build_optimizer()
+        logger.info("[3/3] Building data loaders...")
         self.build_dataloaders()
+        
+        logger.info("=" * 60)
+        logger.info("🚀 Training starting now!")
+        logger.info(f"📊 Total steps: {self.config.max_steps}")
+        logger.info(f"📦 Batch size: {self.config.batch_size}")
+        logger.info(f"📈 Learning rate: {self.config.learning_rate}")
+        logger.info("=" * 60)
         
         # Training loop
         global_step = 0
+        start_time = time.time()
+        step_times = []
         
         try:
+            logger.info("⏳ Starting first training step...")
+            sys.stdout.flush()
+            
             while global_step < self.config.max_steps:
-                for batch in self.train_loader:
+                for batch_idx, batch in enumerate(self.train_loader):
+                    if global_step == 0:
+                        logger.info("📥 Got first batch, running forward pass...")
+                        sys.stdout.flush()
+                    
+                    step_start = time.time()
+                    
                     # Training step
                     loss = self.train_step(batch, global_step)
                     
+                    if global_step == 0:
+                        logger.info("✅ First step complete!")
+                        sys.stdout.flush()
+                    
+                    step_time = time.time() - step_start
+                    step_times.append(step_time)
+                    
                     # Logging
                     if global_step % self.config.log_interval == 0:
-                        logger.info(f"Step {global_step}: loss={loss:.4f}")
+                        progress = (global_step / self.config.max_steps) * 100
+                        avg_step_time = sum(step_times[-10:]) / len(step_times[-10:]) if step_times else 0
+                        tokens_per_sec = (self.config.batch_size * self.config.max_seq_length) / avg_step_time if avg_step_time > 0 else 0
+                        
+                        logger.info(
+                            f"Step {global_step}/{self.config.max_steps} ({progress:.1f}%) | "
+                            f"Loss: {loss:.4f} | "
+                            f"Time: {step_time:.2f}s | "
+                            f"Tokens/s: {tokens_per_sec:.0f}"
+                        )
+                        sys.stdout.flush()
                     
                     # Checkpointing
                     if global_step % self.config.save_interval == 0 and global_step > 0:
