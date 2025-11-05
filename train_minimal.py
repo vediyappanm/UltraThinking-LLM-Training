@@ -6,6 +6,11 @@ Simplified version with all advanced features but graceful fallbacks
 
 import os
 import sys
+
+# Suppress TensorFlow warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
 import argparse
 import logging
 import yaml
@@ -118,16 +123,27 @@ class MinimalTrainer:
         
         try:
             # Try to import UltraThink model
-            from src.models import UltraThinkModel, UltraThinkConfig
+            from src.models import UltraThinkModel, UltraThinkConfig, ModelConfig
             
-            model_config = UltraThinkConfig(
+            # Create base model config first
+            base_config = ModelConfig(
                 vocab_size=self.config.vocab_size,
-                hidden_size=self.config.hidden_size,
-                num_layers=self.config.num_layers,
-                num_heads=self.config.num_heads,
-                max_seq_length=self.config.max_seq_length,
+                n_embd=self.config.hidden_size,
+                n_layer=self.config.num_layers,
+                n_head=self.config.num_heads,
+                n_positions=self.config.max_seq_length,
             )
-            self.model = UltraThinkModel(model_config)
+            
+            # Create UltraThink config with base config
+            ultrathink_config = UltraThinkConfig(
+                model_config=base_config,
+                enable_dre=False,  # Disable for faster startup
+                enable_constitutional=False,
+                enable_moe=False,
+                enable_multimodal=False,
+            )
+            
+            self.model = UltraThinkModel(ultrathink_config)
             logger.info("✅ Using UltraThinkModel")
             
         except Exception as e:
