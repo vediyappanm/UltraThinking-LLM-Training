@@ -467,7 +467,13 @@ class DynamicReasoningEngine(nn.Module):
             )
         
         # Hard routing: select single path
-        path_idx = probs.argmax(dim=-1).item()
+        path_indices = probs.argmax(dim=-1)
+        # For batch processing, select the most frequent path (mode)
+        if path_indices.numel() > 1:
+            path_idx = torch.mode(path_indices).values.item()
+        else:
+            path_idx = path_indices.item()
+            
         selected_path = list(ReasoningPath)[path_idx]
         
         # Apply complexity threshold override only when NOT training
@@ -491,7 +497,7 @@ class DynamicReasoningEngine(nn.Module):
         probs_np = probs.detach().to(torch.float32).cpu().numpy()
         return RoutingDecision(
             path=selected_path,
-            confidence=confidence.item(),
+            confidence=confidence.mean().item(),
             complexity_score=complexity_score,
             estimated_latency_ms=self._estimate_latency(selected_path),
             debug_info={

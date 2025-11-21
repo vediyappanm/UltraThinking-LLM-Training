@@ -388,7 +388,7 @@ python train_advanced.py --config configs/train_small.yaml
 python train_advanced.py --config configs/train_medium.yaml
 
 # Large model (40GB+ GPU)
-python train_advanced.py --config configs/train_large.yaml
+python train_unified_production.py --config configs/train_large.yaml
 ```
 
 ## 🐳 Docker Usage

@@ -11,6 +11,12 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+try:
+    from megatron_compat.layers import ColumnParallelLinear, RowParallelLinear, VocabParallelEmbedding  # type: ignore
+except Exception:
+    ColumnParallelLinear = None  # type: ignore
+    RowParallelLinear = None  # type: ignore
+    VocabParallelEmbedding = None  # type: ignore
 
 try:
     from flash_attn import flash_attn_func
@@ -47,6 +53,9 @@ class ModelConfig:
     rope_scaling: Optional[Dict] = None
     gradient_checkpointing: bool = True
     max_position_embeddings: int = 8192
+    # Megatron-LM compatibility
+    tensor_parallel_size: int = 1
+    use_megatron_tp: bool = False
     
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -158,9 +167,16 @@ class SwiGLU(nn.Module):
         self.hidden_size = config.n_embd
         self.intermediate_size = config.intermediate_size
         
-        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
-        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
+        use_tp = bool(getattr(config, 'use_megatron_tp', False)) and int(getattr(config, 'tensor_parallel_size', 1)) > 1
+        if use_tp and ColumnParallelLinear is not None and RowParallelLinear is not None:
+            tp_size = int(getattr(config, 'tensor_parallel_size', 1))
+            self.gate_proj = ColumnParallelLinear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias, gather_output=False, tensor_parallel_size=tp_size)
+            self.up_proj = ColumnParallelLinear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias, gather_output=False, tensor_parallel_size=tp_size)
+            self.down_proj = RowParallelLinear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias, input_is_parallel=True, tensor_parallel_size=tp_size)
+        else:
+            self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+            self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+            self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
         
         # Mark for scaled initialization
         self.down_proj.scale_init = True
@@ -181,10 +197,22 @@ class GroupedQueryAttention(nn.Module):
         self.head_dim = self.hidden_size // self.num_heads
         self.num_kv_groups = self.num_heads // self.num_kv_heads
         
-        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=config.attention_bias)
-        self.k_proj = nn.Linear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=config.attention_bias)
-        self.v_proj = nn.Linear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=config.attention_bias)
-        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=config.attention_bias)
+        use_tp = bool(getattr(config, 'use_megatron_tp', False)) and int(getattr(config, 'tensor_parallel_size', 1)) > 1
+        if use_tp and ColumnParallelLinear is not None and RowParallelLinear is not None:
+            tp_size = int(getattr(config, 'tensor_parallel_size', 1))
+            # Column-parallel QKV, do not gather to keep partitioned heads
+            self.q_proj = ColumnParallelLinear(self.hidden_size, self.num_heads * self.head_dim, bias=config.attention_bias, gather_output=False, tensor_parallel_size=tp_size)
+            self.k_proj = ColumnParallelLinear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=config.attention_bias, gather_output=False, tensor_parallel_size=tp_size)
+            self.v_proj = ColumnParallelLinear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=config.attention_bias, gather_output=False, tensor_parallel_size=tp_size)
+            # Row-parallel output, input is partitioned across heads/features
+            self.o_proj = RowParallelLinear(self.num_heads * self.head_dim, self.hidden_size, bias=config.attention_bias, input_is_parallel=True, tensor_parallel_size=tp_size)
+            self._tp_size = tp_size
+        else:
+            self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=config.attention_bias)
+            self.k_proj = nn.Linear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=config.attention_bias)
+            self.v_proj = nn.Linear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=config.attention_bias)
+            self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=config.attention_bias)
+            self._tp_size = 1
         
         self.rotary_emb = RotaryPositionalEmbedding(
             config.rotary_dim, 
@@ -210,9 +238,13 @@ class GroupedQueryAttention(nn.Module):
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
 
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        # Adjust local heads for tensor parallel
+        local_num_heads = self.num_heads // self._tp_size
+        local_num_kv_heads = self.num_kv_heads // self._tp_size
+
+        query_states = query_states.view(bsz, q_len, local_num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, local_num_kv_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, local_num_kv_heads, self.head_dim).transpose(1, 2)
 
         # Apply rotary embeddings
         cos, sin = self.rotary_emb(value_states, seq_len=q_len)
@@ -345,7 +377,11 @@ class AdvancedGPTModel(nn.Module):
         self.config = config
         
         # Embeddings
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.n_embd)
+        use_tp = bool(getattr(config, 'use_megatron_tp', False)) and int(getattr(config, 'tensor_parallel_size', 1)) > 1 and VocabParallelEmbedding is not None
+        if use_tp:
+            self.embed_tokens = VocabParallelEmbedding(config.vocab_size, config.n_embd, tensor_parallel_size=int(getattr(config, 'tensor_parallel_size', 1)))
+        else:
+            self.embed_tokens = nn.Embedding(config.vocab_size, config.n_embd)
         self.embed_dropout = nn.Dropout(config.embed_dropout)
         
         # Transformer blocks
