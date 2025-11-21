@@ -20,7 +20,7 @@ advanced:
   enable_moe: true
   enable_dre: true
   enable_constitutional: true
-  enable_rlhf: false  # Enable after pretraining
+  enable_rlhf: true  # Enable after pretraining
   enable_multimodal: true
   dre_warmup_steps: 10000
 

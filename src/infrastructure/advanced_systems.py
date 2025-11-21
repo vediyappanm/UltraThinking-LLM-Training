@@ -193,7 +193,10 @@ class PerformanceProfiler:
         """NVTX range marker"""
         if self.nvtx_available:
             return self.nvtx.annotate(name, color=color)
-        return None
+        
+        # Return dummy context manager if NVTX unavailable
+        from contextlib import nullcontext
+        return nullcontext()
     
     def start_timer(self, name: str):
         """Start timer"""

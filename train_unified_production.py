@@ -100,7 +100,6 @@ except ImportError as e:
 
 # Monitoring imports
 from src.monitoring import (
-    MetricsTracker,
     SystemMonitor,
 )
 
@@ -120,13 +119,15 @@ class UnifiedTrainingConfig:
     """Unified configuration for all training features"""
     
     def __init__(self, config_path: Optional[str] = None):
+        """Initialize config with sensible defaults, then apply YAML overrides if provided."""
+        # Always start from defaults so all attributes exist
+        self._set_defaults()
+
         # Load from YAML if provided
         if config_path and os.path.exists(config_path):
             with open(config_path, 'r') as f:
-                config_dict = yaml.safe_load(f)
+                config_dict = yaml.safe_load(f) or {}
             self._load_from_dict(config_dict)
-        else:
-            self._set_defaults()
     
     def _set_defaults(self):
         """Set default configuration"""
@@ -218,10 +219,45 @@ class UnifiedTrainingConfig:
         self.experiment_name = "ultrathink_production"
     
     def _load_from_dict(self, config_dict: Dict[str, Any]):
-        """Load configuration from dictionary"""
+        """Load configuration from (possibly nested) dictionary.
+
+        Supports nested sections like model, training, data, logging, output, advanced, moe
+        from YAML configs such as configs/train_small.yaml.
+        """
+
         for key, value in config_dict.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
+            # Direct, flat override
+            if not isinstance(value, dict):
+                if hasattr(self, key):
+                    setattr(self, key, value)
+                continue
+
+            # Nested sections
+            if key == "model":
+                for sub_key, sub_val in value.items():
+                    if hasattr(self, sub_key):
+                        setattr(self, sub_key, sub_val)
+            elif key == "training":
+                for sub_key, sub_val in value.items():
+                    if hasattr(self, sub_key):
+                        setattr(self, sub_key, sub_val)
+            elif key == "data":
+                for sub_key, sub_val in value.items():
+                    if hasattr(self, sub_key):
+                        setattr(self, sub_key, sub_val)
+            elif key == "logging":
+                # Reserved for future logging-specific attributes; ignore for now
+                continue
+            elif key == "output":
+                # Map output_dir and similar fields
+                out_dir = value.get("output_dir")
+                if out_dir is not None:
+                    self.output_dir = out_dir
+            elif key in ("advanced", "moe"):
+                # Advanced / MoE toggles: map when attribute names match
+                for sub_key, sub_val in value.items():
+                    if hasattr(self, sub_key):
+                        setattr(self, sub_key, sub_val)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -290,17 +326,48 @@ class UnifiedProductionTrainer:
         
         if self.config.model_type == "ultrathink":
             # UltraThink model with all features
-            model_config = UltraThinkConfig(
+            head_dim = self.config.hidden_size // self.config.num_heads
+            base_model_config = ModelConfig(
                 vocab_size=self.config.vocab_size,
-                hidden_size=self.config.hidden_size,
-                num_layers=self.config.num_layers,
-                num_heads=self.config.num_heads,
-                max_seq_length=self.config.max_seq_length,
-                use_moe=self.config.use_moe,
-                num_experts=self.config.num_experts,
-                experts_per_token=self.config.experts_per_token,
+                n_positions=self.config.max_seq_length,
+                n_embd=self.config.hidden_size,
+                n_layer=self.config.num_layers,
+                n_head=self.config.num_heads,
+                n_kv_head=self.config.num_kv_heads,
+                rotary_dim=head_dim,
+                intermediate_size=getattr(self.config, "intermediate_size", 4 * self.config.hidden_size),
+                activation=getattr(self.config, "activation", "swiglu"),
+                dropout=getattr(self.config, "dropout", 0.0),
+                attention_dropout=getattr(self.config, "attention_dropout", 0.0),
+                flash_attention=self.config.use_flash_attention,
+                gradient_checkpointing=getattr(self.config, "gradient_checkpointing", True),
+                max_position_embeddings=self.config.max_seq_length,
             )
-            self.model = UltraThinkModel(model_config)
+
+            ultrathink_cfg = UltraThinkConfig(
+                model_config=base_model_config,
+                enable_moe=bool(self.config.use_moe),
+                moe_config=ExpertConfig(
+                    num_knowledge_experts=getattr(self.config, "num_experts", 8),
+                    num_skill_experts=max(4, getattr(self.config, "num_experts", 8) // 2),
+                    num_meta_experts=max(2, getattr(self.config, "num_experts", 8) // 4),
+                    num_safety_experts=max(2, getattr(self.config, "num_experts", 8) // 4),
+                    top_k=getattr(self.config, "experts_per_token", 2),
+                ),
+                enable_dre=getattr(self.config, "use_dynamic_reasoning", True),
+                enable_constitutional=getattr(self.config, "use_constitutional_ai", True),
+                enable_multimodal=False,
+                enable_rlhf=bool(self.config.use_rlhf),
+                batch_size=self.config.batch_size,
+                gradient_accumulation=self.config.gradient_accumulation_steps,
+                learning_rate=self.config.learning_rate,
+                warmup_steps=self.config.warmup_steps,
+                max_steps=self.config.max_steps,
+                gradient_checkpointing=getattr(self.config, "gradient_checkpointing", True),
+                mixed_precision=self.config.mixed_precision,
+            )
+
+            self.model = UltraThinkModel(ultrathink_cfg)
         
         elif self.config.model_type == "gpt":
             # Advanced GPT model
@@ -378,9 +445,14 @@ class UnifiedProductionTrainer:
         logger.info("Building optimizer...")
         
         if self.config.use_fused_optimizer:
+            # Normalize optimizer type
+            opt_type = self.config.optimizer_type
+            if opt_type == "fused_adamw":
+                opt_type = "adamw"
+
             self.optimizer = create_fused_optimizer(
                 self.model,
-                optimizer_type=self.config.optimizer_type,
+                optimizer_type=opt_type,
                 lr=self.config.learning_rate,
                 weight_decay=self.config.weight_decay,
                 use_fused=True,
@@ -575,11 +647,8 @@ class UnifiedProductionTrainer:
             )
             logger.info("Paged checkpoint manager enabled")
         
-        # Metrics tracker
-        self.metrics_tracker = MetricsTracker(
-            log_dir=str(self.output_dir / "metrics"),
-            experiment_name=self.config.experiment_name,
-        )
+        # Metrics tracker (disabled placeholder to avoid missing class)
+        self.metrics_tracker = None
         
         # System monitor
         self.system_monitor = SystemMonitor(
