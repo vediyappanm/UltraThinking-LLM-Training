@@ -256,6 +256,16 @@ class UnifiedTrainingConfig:
             elif key in ("advanced", "moe"):
                 # Advanced / MoE toggles: map when attribute names match
                 for sub_key, sub_val in value.items():
+                    # Map YAML keys to internal config attributes
+                    if sub_key == "enable_moe":
+                        self.use_moe = sub_val
+                    elif sub_key == "enable_dre":
+                        self.use_dynamic_reasoning = sub_val
+                    elif sub_key == "enable_constitutional":
+                        self.use_constitutional_ai = sub_val
+                    elif sub_key == "enable_rlhf":
+                        self.use_rlhf = sub_val
+                    
                     if hasattr(self, sub_key):
                         setattr(self, sub_key, sub_val)
     
