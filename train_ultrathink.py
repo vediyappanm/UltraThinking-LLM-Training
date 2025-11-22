@@ -190,7 +190,7 @@ class UltraThinkTrainer:
         if self.args.num_heads % num_kv_heads != 0:
             num_kv_heads = self.args.num_heads  # Fall back to MHA if not divisible
         
-        if isinstance(self.args.model_config, dict):
+        if hasattr(self.args, 'model_config') and isinstance(self.args.model_config, dict):
             self.args.vocab_size = int(self.args.model_config.get('vocab_size', self.args.vocab_size))
             self.args.max_seq_length = int(self.args.model_config.get('n_positions', self.args.max_seq_length))
             self.args.hidden_size = int(self.args.model_config.get('n_embd', self.args.hidden_size))
