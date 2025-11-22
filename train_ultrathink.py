@@ -804,19 +804,39 @@ class UltraThinkTrainer:
             if (epoch + 1) % self.args.eval_frequency == 0:
                 self.evaluate()
 
-        if self.args.continuous:
-            logger.info("Continuous training enabled: will run indefinitely until interrupted.")
-            epoch = self.start_epoch
-            try:
+        try:
+            if self.args.continuous:
+                logger.info("Continuous training enabled: will run indefinitely until interrupted.")
+                epoch = self.start_epoch
                 while True:
                     run_one_epoch(epoch)
                     epoch += 1
-            except KeyboardInterrupt:
-                logger.info("Continuous training interrupted by user.")
-        else:
-            for epoch in range(self.start_epoch, self.args.num_epochs):
-                run_one_epoch(epoch)
-        
+            else:
+                for epoch in range(self.start_epoch, self.args.num_epochs):
+                    run_one_epoch(epoch)
+                    max_steps_val = getattr(self.args, "max_steps", None)
+                    if max_steps_val is not None:
+                        try:
+                            max_steps = int(max_steps_val)
+                        except Exception:
+                            max_steps = None
+                        if max_steps is not None and max_steps > 0 and self.global_step >= max_steps:
+                            logger.info(f"Reached max_steps={max_steps}, stopping training.")
+                            break
+        except KeyboardInterrupt:
+            logger.info("Training interrupted by user, saving checkpoint...")
+            try:
+                interrupt_epoch = epoch if 'epoch' in locals() else self.start_epoch
+                # Save checkpoint via utility using best validation loss so far (or 0.0 if none yet)
+                val_for_ckpt = float(best_val_loss) if best_val_loss != float('inf') else 0.0
+                save_checkpoint(self.args.output_dir, int(interrupt_epoch), self.train_model, getattr(self, 'optimizer', None), getattr(self, 'scheduler', None), val_for_ckpt, self.config)
+            except Exception as e:
+                logger.warning(f"Failed to save checkpoint on interrupt: {e}")
+            return {
+                'summary': 'Training interrupted by user.',
+                'aggregate_scores': {}
+            }
+
         logger.info("Training completed!")
         
         # Final evaluation

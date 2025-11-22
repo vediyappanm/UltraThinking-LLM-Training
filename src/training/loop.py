@@ -213,6 +213,18 @@ def train_one_epoch(
                     optimizer.zero_grad(set_to_none=True)
                 global_step += 1
 
+                # Early stopping based on max_steps, if configured
+                max_steps_val = getattr(args, "max_steps", None)
+                try:
+                    max_steps = int(max_steps_val) if max_steps_val is not None else None
+                except Exception:
+                    max_steps = None
+                if max_steps is not None and max_steps > 0 and global_step >= max_steps:
+                    logger.info(
+                        f"Reached max_steps={max_steps}, stopping epoch early at batch {batch_idx + 1}."
+                    )
+                    break
+
         total_loss += float(loss.detach())
         num_batches += 1
 
