@@ -73,7 +73,7 @@ except ImportError as e:
 try:
     from src.training.optim import build_optimizer
     from src.training.scheduler import build_scheduler
-    from src.training.checkpoint import save_checkpoint, load_checkpoint
+    from src.training.checkpoint import save_checkpoint, save_step_checkpoint, load_checkpoint
     from src.training.loop import train_one_epoch, validate_epoch
 except Exception as _e:
     logger.warning(f"Modular training utilities import issue: {_e}")
@@ -105,6 +105,8 @@ class UltraThinkTrainer:
         
         # Create configurations
         self.config = self.create_config()
+        # Expose config on args for utilities that only see the args namespace
+        setattr(self.args, "_ultrathink_config", self.config)
         
         # Initialize or load model
         logger.info("Initializing ULTRATHINK model...")
@@ -775,6 +777,7 @@ class UltraThinkTrainer:
         def run_one_epoch(epoch: int):
             nonlocal best_val_loss
             logger.info(f"Epoch {epoch + 1}")
+            prev_step = self.global_step
             train_loss, self.global_step = train_one_epoch(
                 model=self.train_model,
                 train_loader=self.train_loader,
@@ -788,6 +791,28 @@ class UltraThinkTrainer:
                 is_main_process=self.is_main_process(),
             )
             logger.info(f"Training loss: {train_loss:.4f}")
+
+            # GPT-style periodic step-based checkpoints
+            save_every = getattr(self.args, "save_every_steps", None)
+            try:
+                save_every_int = int(save_every) if save_every is not None else 0
+            except Exception:
+                save_every_int = 0
+            if save_every_int > 0 and self.is_main_process():
+                try:
+                    for step in range(prev_step + 1, self.global_step + 1):
+                        if step % save_every_int == 0:
+                            save_step_checkpoint(
+                                checkpoint_dir=self.args.output_dir,
+                                step=step,
+                                model=self.train_model,
+                                optimizer=getattr(self, 'optimizer', None),
+                                scheduler=getattr(self, 'scheduler', None),
+                                config=self.config,
+                            )
+                except Exception as e:
+                    logger.warning(f"Failed to save step checkpoint between steps {prev_step} and {self.global_step}: {e}")
+
             val_loss = validate_epoch(
                 model=self.train_model,
                 val_loader=self.val_loader,
@@ -962,6 +987,8 @@ def parse_args():
     parser.add_argument('--eval_frequency', type=int, default=5)
     parser.add_argument('--val_max_batches', type=int, default=None,
                         help='Maximum number of validation batches to run per evaluation (None = full validation set)')
+    parser.add_argument('--save_every_steps', type=int, default=None,
+                        help='Save a checkpoint_step_{step}.pt every N global steps (GPT-style). None or 0 disables.')
 
     # Logging
     parser.add_argument('--use_wandb', action='store_true')

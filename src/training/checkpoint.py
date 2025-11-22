@@ -18,6 +18,25 @@ def save_checkpoint(checkpoint_dir: str, epoch: int, model, optimizer, scheduler
     return path
 
 
+def save_step_checkpoint(checkpoint_dir: str, step: int, model, optimizer, scheduler, config=None) -> str:
+    """Save a GPT-style step-based checkpoint.
+
+    This complements epoch-based checkpoints by saving the full training state
+    at a specific global step, typically every N steps.
+    """
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    path = os.path.join(checkpoint_dir, f"checkpoint_step_{step}.pt")
+    payload = {
+        "step": int(step),
+        "model_state_dict": model.state_dict() if hasattr(model, "state_dict") else model.module.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict() if optimizer is not None else None,
+        "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
+        "config": config,
+    }
+    torch.save(payload, path)
+    return path
+
+
 def load_checkpoint(path: str, model, optimizer=None, scheduler=None) -> Optional[int]:
     if not os.path.exists(path):
         return None
