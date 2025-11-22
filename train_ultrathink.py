@@ -793,6 +793,7 @@ class UltraThinkTrainer:
                 val_loader=self.val_loader,
                 device=self.device,
                 is_main_process=self.is_main_process(),
+                max_val_batches=getattr(self.args, "val_max_batches", None),
             )
             logger.info(f"Validation loss: {val_loss:.4f}")
             if val_loss < best_val_loss:
@@ -959,6 +960,8 @@ def parse_args():
 
     # Evaluation
     parser.add_argument('--eval_frequency', type=int, default=5)
+    parser.add_argument('--val_max_batches', type=int, default=None,
+                        help='Maximum number of validation batches to run per evaluation (None = full validation set)')
 
     # Logging
     parser.add_argument('--use_wandb', action='store_true')

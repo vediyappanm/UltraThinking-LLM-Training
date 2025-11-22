@@ -606,7 +606,7 @@ def train_one_epoch(
     return avg_loss, global_step
 
 
-def validate_epoch(*, model, val_loader, device, is_main_process: bool) -> float:
+def validate_epoch(*, model, val_loader, device, is_main_process: bool, max_val_batches: Optional[int] = None) -> float:
     model.eval()
     total_loss = 0.0
     num = 0
@@ -617,6 +617,12 @@ def validate_epoch(*, model, val_loader, device, is_main_process: bool) -> float
             step_loss = float(outputs["loss"].detach())
             total_loss += step_loss
             num += 1
+            
+            # Optional early stopping for validation to limit runtime
+            if max_val_batches is not None and max_val_batches > 0 and num >= max_val_batches:
+                if is_main_process:
+                    logger.info(f"Reached max_val_batches={max_val_batches}, stopping validation early.")
+                break
             
             # Log validation progress every 50 steps
             if num % 50 == 0 and is_main_process:
