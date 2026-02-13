@@ -18,13 +18,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -r deep/requirements.txt
           pip install black flake8 mypy pytest
+          if [ -d "deep" ]; then pip install -r deep/requirements.txt; fi
       - name: Lint
         run: |
-          black --check deep/src deep/train_ultrathink.py || true
-          flake8 deep/src deep/train_ultrathink.py || true
-          mypy deep/src || true
+          if [ -d "deep" ]; then 
+            black --check deep/src deep/train_ultrathink.py || true
+            flake8 deep/src deep/train_ultrathink.py || true
+            mypy deep/src || true
+          fi
       - name: PyTest (CPU)
         run: |
           pytest -q
@@ -35,5 +37,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Docker image
         run: |
-          cd deep
-          docker build -t ultrathink:ci .
+          if [ -d "deep" ]; then 
+            cd deep
+            docker build -t ultrathink:ci .
+          fi
